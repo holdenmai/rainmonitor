@@ -1,0 +1,74 @@
+{
+  "_README": "Copy this to config.json (npm run init does it for you) and replace the fields below with your own. lat/lon are decimal degrees — longitude is NEGATIVE in the western hemisphere. Everything else has working defaults.",
+
+  "fields": [
+    { "id": "north-quarter", "name": "North Quarter", "lat": 39.3861, "lon": -101.0523, "acres": 160 },
+    { "id": "south-80",      "name": "South 80",      "lat": 39.3690, "lon": -101.0300, "acres": 80 }
+  ],
+
+  "region": {
+    "_comment": "Leave states empty and it is auto-detected from your field coordinates on `npm run init` / `npm run discover`, then written back here. Set it manually to override.",
+    "states": [],
+    "timezone": "America/Chicago"
+  },
+
+  "sources": {
+    "iemre": {
+      "enabled": true,
+      "label": "MRMS / PRISM gridded (IEM Reanalysis)",
+      "_comment": "~12km grid, CONUS-wide, with full historical backfill. The backbone of the archive."
+    },
+
+    "rfcqpe": {
+      "enabled": true,
+      "label": "RFC QPE 4km (NWS multi-sensor)",
+      "_comment": "~4km grid — the finest source here that needs no GRIB toolchain. SNAPSHOT ONLY: publishes rolling windows with no archive, so it cannot backfill and a missed daily run loses that day permanently. dayOffset files the 24h-ending-12Z product against a local day; -1 is an informed default. Verify with `npm run check` after ~30 days and adjust if the correlation peak is not at lag 0.",
+      "dayOffset": -1
+    },
+
+    "iem_gauge": {
+      "enabled": true,
+      "label": "NWS COOP + ASOS gauges",
+      "_comment": "Leave networks empty to auto-derive <STATE>_COOP and <STATE>_ASOS from the detected region. These cover the whole US.",
+      "networks": [],
+      "maxStations": 3,
+      "maxDistanceKm": 60
+    },
+
+    "ksmesonet": {
+      "enabled": true,
+      "label": "Kansas Mesonet",
+      "_comment": "Kansas only — skipped automatically outside KS. Research-grade gauges, denser than COOP where it applies.",
+      "maxStations": 3,
+      "maxDistanceKm": 70
+    },
+
+    "weatherlink": {
+      "enabled": false,
+      "label": "On-farm weather station",
+      "_comment": "For a Davis (or any station) publishing WeatherLink's NOAA-format reports. Set enabled true and point dailyUrl/yearlyUrl at your own NOAAMO.txt and NOAAYR.txt. lat/lon should be the STATION's position, which its NOAAMO.txt header prints in deg/min/sec. This becomes ground truth and drives `npm run calibrate`. NOTE: NOAAMO.txt holds only the current month and is overwritten at month roll, so daily history accumulates from your first run — run the ingest at least monthly.",
+      "stationId": "MYSTATION",
+      "name": "My Farm Station",
+      "lat": null,
+      "lon": null,
+      "elev_ft": null,
+      "dailyUrl": "http://example.com/weather/NOAAMO.txt",
+      "yearlyUrl": "http://example.com/weather/NOAAYR.txt",
+      "maxDistanceKm": 30
+    }
+  },
+
+  "season": {
+    "_comment": "calendar = Jan 1 totals (US ag convention). water = Oct 1 (western US hydrology convention).",
+    "mode": "calendar",
+    "growingSeasonStart": "04-01"
+  },
+
+  "server": { "port": 8787, "host": "127.0.0.1" },
+
+  "ingest": {
+    "backfillDays": 400,
+    "revisitDays": 10,
+    "_revisitComment": "Re-fetch the last N days every run. PRISM and COOP reports get revised after publication, so recent days are not final."
+  }
+}

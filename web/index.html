@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rain Monitor</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="viz-root">
+
+<header class="topbar">
+  <div class="brand">
+    <h1>Rain Monitor</h1>
+    <p class="sub" id="subtitle">Northwest Kansas</p>
+  </div>
+  <div class="controls">
+    <label class="ctl">
+      <span>Field</span>
+      <select id="fieldSel"></select>
+    </label>
+    <label class="ctl">
+      <span>Range</span>
+      <select id="rangeSel">
+        <option value="14">Last 14 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="365">Last 12 months</option>
+      </select>
+    </label>
+    <button id="themeBtn" class="btn" type="button" aria-label="Toggle dark mode">◐</button>
+    <a id="csvBtn" class="btn" href="/api/export.csv?days=400" download>Export CSV</a>
+  </div>
+</header>
+
+<main>
+  <section class="kpis" id="kpis" aria-label="Rainfall summary"></section>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Daily rainfall</h2>
+        <p class="note" id="dailyNote"></p>
+      </div>
+      <div class="legend" id="legendDaily"></div>
+    </div>
+    <div class="chart-wrap"><svg id="chartDaily" role="img"></svg></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Cumulative over selected range</h2>
+        <p class="note">Accumulates across the range chosen above, not the whole season. This is the honest way to compare sources — day-level binning differences wash out, so a gap that keeps widening is a real disagreement about this field.</p>
+      </div>
+      <div class="legend" id="legendCum"></div>
+    </div>
+    <div class="chart-wrap"><svg id="chartCum" role="img"></svg></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>All fields, season to date</h2>
+        <p class="note" id="fieldsNote"></p>
+      </div>
+    </div>
+    <div class="chart-wrap"><svg id="chartFields" role="img"></svg></div>
+  </section>
+
+  <section class="card" id="calCard" hidden>
+    <div class="card-head">
+      <div>
+        <h2>Radar checked against your own gauge</h2>
+        <p class="note" id="calNote"></p>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="calTable"><thead></thead><tbody></tbody></table></div>
+    <p class="note" id="calVerdict" style="margin:10px 0 6px"></p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Daily table</h2>
+        <p class="note">Blank means the source reported nothing for that day — not zero rain.</p>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="dataTable"><thead></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><div><h2>Gauges used for this field</h2>
+      <p class="note">Nearest first. The daily gauge figure comes from the closest station that actually reported that day.</p></div></div>
+    <div class="table-wrap"><table id="stationTable"><thead></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Fields</h2>
+        <p class="note">Edits are written straight to <code>config.json</code> and the nearby gauges are remapped immediately. After adding a field, run <code>npm run backfill</code> to pull its history.</p>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="fieldTable"><thead></thead><tbody></tbody></table></div>
+
+    <form id="addField" class="fieldform">
+      <label><span>Name</span><input name="name" placeholder="North 80" required></label>
+      <label><span>Latitude</span><input name="lat" type="number" step="any" placeholder="39.3861" required></label>
+      <label><span>Longitude</span><input name="lon" type="number" step="any" placeholder="-101.0523" required></label>
+      <label><span>Acres <em>(optional)</em></span><input name="acres" type="number" step="any" placeholder="160"></label>
+      <button class="btn" type="submit">Add field</button>
+    </form>
+    <p class="note" id="fieldMsg" style="margin:8px 0 6px"></p>
+  </section>
+
+  <p class="footer" id="footer"></p>
+</main>
+
+<div id="tooltip" class="tooltip" role="status" aria-live="polite" hidden></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

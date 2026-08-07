@@ -1,0 +1,22 @@
+{
+  "name": "rainmonitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local rainfall monitoring for farm fields: gridded QPE + nearby rain gauges, stored locally.",
+  "engines": { "node": ">=22.5.0" },
+  "license": "MIT",
+  "scripts": {
+    "init": "node src/cli.js init",
+    "discover": "node src/cli.js discover",
+    "ingest": "node src/cli.js ingest",
+    "backfill": "node src/cli.js backfill",
+    "serve": "node src/server.js",
+    "fields": "node src/cli.js fields",
+    "add-field": "node src/cli.js add-field",
+    "update-field": "node src/cli.js update-field",
+    "remove-field": "node src/cli.js remove-field",
+    "check": "node scripts/check-alignment.mjs",
+    "calibrate": "node scripts/calibrate.mjs"
+  }
+}

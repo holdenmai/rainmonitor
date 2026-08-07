@@ -1,0 +1,10 @@
+# Your own setup — field coordinates and personal station URLs stay local.
+# Ship config.example.json instead; `npm run init` copies it into place.
+config.json
+
+# Collected observations
+data/
+
+node_modules/
+*.png
+*.log
