@@ -11,7 +11,7 @@ import {
 
 const [, , cmd, ...rest] = process.argv;
 
-/** --name "North 80" --lat 39.4 --lon -101.0 --acres 160 --farm "Mai Farms" */
+/** --name "North 80" --lat 39.4 --lon -101.0 --acres 160 --farm "Home Place" */
 function flags(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
@@ -32,8 +32,8 @@ const usage = () => console.log(`rainmonitor
   npm run serve                start the local dashboard
 
   npm run fields                                       list your fields
-  npm run add-field -- --name "North 80" --lat 39.4 --lon -101.05 [--acres 160] [--farm "Mai Farms"]
-  npm run update-field -- --id north-80 --acres 155 --farm "Mai Farms"
+  npm run add-field -- --name "North 80" --lat 39.4 --lon -101.05 [--acres 160] [--farm "Home Place"]
+  npm run update-field -- --id north-80 --acres 155 --farm "Home Place"
   npm run remove-field -- --id north-80
 
   npm run export -- --days 14 [--from D] [--to D] [--sources rfcqpe] [--out file.json]

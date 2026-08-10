@@ -101,7 +101,7 @@ latitude / longitude. Gauges are remapped the moment you save. **Acres** and
 ```bash
 npm run fields                                    # list what you have
 npm run add-field -- --name "North 80" --lat 39.4310 --lon -101.0490 --acres 80
-npm run update-field -- --id north-80 --acres 78 --farm "Mai Farms"
+npm run update-field -- --id north-80 --acres 78 --farm "Home Place"
 npm run remove-field -- --id north-80
 ```
 
@@ -127,7 +127,7 @@ comparison to that farm's ground; fields with no farm set stay reachable under
 several operations and want to see one of them at a time.
 
 Farm names are matched case-insensitively against the ones already in use, so
-`mai farms` typed into a second field joins `Mai Farms` rather than starting a
+`home place` typed into a second field joins `Home Place` rather than starting a
 near-duplicate.
 
 ## Gauges you read yourself
@@ -175,8 +175,8 @@ dashboard says so when it applies.
 It is stored per field in `config.json`:
 
 ```json
-{ "id": "river", "name": "River", "lat": 38.94, "lon": -101.80,
-  "exclude": { "sources": ["prism"], "stations": ["ONFARM|MAIFARMS"] } }
+{ "id": "north-quarter", "name": "North Quarter", "lat": 39.3861, "lon": -101.0523,
+  "exclude": { "sources": ["prism"], "stations": ["ONFARM|MYSTATION"] } }
 ```
 
 ## Running it on more than one computer

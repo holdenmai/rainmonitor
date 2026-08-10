@@ -51,7 +51,7 @@ export function validateField({ name, lat, lon, acres, farm }) {
  * Farms are a plain string on the field, matched case-insensitively but stored
  * as typed. There is no farm registry to keep in sync: a farm exists exactly as
  * long as some field names it, so renaming the last field off a farm retires it.
- * Reusing the existing spelling keeps "Mai Farms" and "mai farms" from becoming
+ * Reusing the existing spelling keeps "Home Place" and "home place" from becoming
  * two entries in the filter.
  */
 export function normalizeFarm(cfg, farm) {
