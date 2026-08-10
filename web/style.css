@@ -141,6 +141,8 @@ td.none { color: var(--text-muted); }
 .tooltip .tt-note { color: var(--text-muted); margin-top: 5px; font-size: 11px; }
 
 .fieldform { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 14px; }
+/* display:flex outranks the user-agent [hidden] rule, so say it explicitly. */
+.fieldform[hidden] { display: none; }
 .fieldform label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-muted); }
 .fieldform label em { font-style: normal; opacity: 0.75; }
 .fieldform input {
