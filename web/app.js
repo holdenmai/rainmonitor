@@ -231,6 +231,62 @@ function binWeekly(rows) {
 let META = null;
 const $ = id => document.getElementById(id);
 
+/* ---------- farm filter ---------- */
+// Empty set means "all farms" — an explicit all-selected state would silently
+// stop including new farms as they are added.
+const NO_FARM = ' none';
+let farmSel = new Set();
+try { farmSel = new Set(JSON.parse(localStorage.getItem('rm-farms') || '[]')); } catch { /* ignore */ }
+
+const farmKey = f => f.farm || NO_FARM;
+const visibleFields = () =>
+  (META.fields ?? []).filter(f => !farmSel.size || farmSel.has(farmKey(f)));
+
+function renderFarmFilter() {
+  const farms = META.farms ?? [];
+  const unassigned = META.fields.some(f => !f.farm);
+  // Drop selections whose farm no longer exists, or the filter would keep
+  // hiding fields for a reason nothing on screen explains.
+  const live = new Set([...farms, ...(unassigned ? [NO_FARM] : [])]);
+  for (const k of farmSel) if (!live.has(k)) farmSel.delete(k);
+
+  const opts = [...farms.map(f => ({ k: f, label: f })),
+                ...(unassigned ? [{ k: NO_FARM, label: 'No farm set' }] : [])];
+  $('farmOptions').innerHTML = opts.length
+    ? `<label><input type="checkbox" data-farm="*" ${farmSel.size ? '' : 'checked'}>All farms</label>
+       <div class="sep"></div>` +
+      opts.map(o => `<label><input type="checkbox" data-farm="${encodeURIComponent(o.k)}"`
+        + `${farmSel.has(o.k) ? ' checked' : ''}>${esc(o.label)}</label>`).join('')
+    : '<p class="none">No farms yet — set one on a field below.</p>';
+
+  $('farmSummary').textContent = !farmSel.size ? 'All farms'
+    : farmSel.size === 1 ? (farmSel.has(NO_FARM) ? 'No farm set' : [...farmSel][0])
+    : `${farmSel.size} farms`;
+
+  $('farmOptions').querySelectorAll('input').forEach(box => box.addEventListener('change', () => {
+    const k = box.dataset.farm === '*' ? '*' : decodeURIComponent(box.dataset.farm);
+    if (k === '*') farmSel.clear();
+    else if (box.checked) farmSel.add(k); else farmSel.delete(k);
+    localStorage.setItem('rm-farms', JSON.stringify([...farmSel]));
+    renderFarmFilter();
+    refreshFieldSelect();
+    load();
+  }));
+}
+
+/** Rebuild the field dropdown for the current farm filter, keeping the
+ *  selection if it survives the filter. */
+function refreshFieldSelect(prefer) {
+  const sel = $('fieldSel');
+  const want = prefer ?? sel.value;
+  const list = visibleFields();
+  sel.innerHTML = list.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
+  sel.value = list.some(f => f.id === want) ? want : (list[0]?.id ?? '');
+}
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 async function load() {
   const fieldId = $('fieldSel').value;
   const days = Number($('rangeSel').value);
@@ -292,8 +348,10 @@ async function load() {
   legendInto($('legendCum'), SERIES, starts);
   drawDaily($('chartDaily'), chartRows, weekly ? (d => mdy(d)) : mdy);
   drawCumulative($('chartCum'), rows);
-  $('fieldsNote').textContent = `Radar QPE totals since ${META.seasonStart}. Selected field highlighted.`;
-  drawFields($('chartFields'), summaries, META.fields, fieldId);
+  const shown = visibleFields();
+  const scope = farmSel.size ? ` ${shown.length} of ${META.fields.length} fields shown for the selected farm${farmSel.size > 1 ? 's' : ''}.` : '';
+  $('fieldsNote').textContent = `Radar QPE totals since ${META.seasonStart}. Selected field highlighted.${scope}`;
+  drawFields($('chartFields'), summaries.filter(s => shown.some(f => f.id === s.field_id)), META.fields, fieldId);
 
   // Calibration: how the gridded products compare to the gauge on Home 8.
   if (cal && cal.months?.length) {
@@ -338,7 +396,11 @@ async function load() {
   renderFields();
 
   $('csvBtn').href = `/api/export.csv?field=${fieldId}&days=${Math.max(days, 400)}`;
-  $('subtitle').textContent = `${field.name} · ${field.lat.toFixed(4)}, ${field.lon.toFixed(4)}${field.acres ? ` · ${field.acres} ac` : ''}`;
+  $('subtitle').textContent = [
+    field.farm ? `${field.farm} · ${field.name}` : field.name,
+    `${field.lat.toFixed(4)}, ${field.lon.toFixed(4)}`,
+    field.acres ? `${field.acres} ac` : null,
+  ].filter(Boolean).join(' · ');
   $('footer').textContent = `Sources: MRMS radar QPE and PRISM via IEM reanalysis; gauges via NWS COOP/ASOS and Kansas Mesonet. Last ingest ${META.lastIngest ?? 'never'} UTC.`;
 }
 
@@ -349,17 +411,20 @@ const msg = (t, bad) => {
   n.style.color = bad ? 'var(--warning)' : 'var(--text-muted)';
 };
 
-async function saveField(payload, method = 'POST') {
-  msg('Saving and remapping gauges…');
+async function saveField(payload, method = 'POST', note = 'Saving…') {
+  msg(note);
   const res = await fetch('/api/config/fields', {
     method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { msg(body.error || `Failed (${res.status})`, true); return false; }
   META = await fetch('/api/fields').then(r => r.json());
-  const keep = META.fields.some(f => f.id === $('fieldSel').value);
-  $('fieldSel').innerHTML = META.fields.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
-  if (keep) $('fieldSel').value = payload.id && method !== 'DELETE' ? payload.id : $('fieldSel').value;
+  renderFarmFilter();
+  // A new field becomes the selection; an edit leaves the selection alone, so
+  // fixing the acreage on one field does not yank the charts to it.
+  refreshFieldSelect(method === 'POST' && !payload.id
+    ? META.fields.find(f => f.name === String(payload.name).trim())?.id
+    : undefined);
   await load();
   return true;
 }
@@ -367,23 +432,46 @@ async function saveField(payload, method = 'POST') {
 function renderFields() {
   const t = $('fieldTable');
   t.querySelector('thead').innerHTML =
-    '<tr><th>Field</th><th>Latitude</th><th>Longitude</th><th>Acres</th><th>Nearest gauge</th><th></th></tr>';
+    '<tr><th>Field</th><th>Farm</th><th>Latitude</th><th>Longitude</th><th>Acres</th><th>Nearest gauge</th><th></th></tr>';
+  const cell = (f, k, extra = '') =>
+    `<input class="cell ${extra}" data-edit="${k}" data-id="${f.id}" value="${esc(f[k] ?? '')}"`
+    + (k === 'farm' ? ' list="farmList" placeholder="—"' : '') + '>';
   t.querySelector('tbody').innerHTML = META.fields.map(f => {
     const near = f.stations?.[0];
     return `<tr>
-      <td>${f.name}</td>
+      <td>${esc(f.name)}</td>
+      <td>${cell(f, 'farm')}</td>
       <td>${f.lat.toFixed(6)}</td>
       <td>${f.lon.toFixed(6)}</td>
-      <td>${f.acres ?? '<span class="none">—</span>'}</td>
-      <td class="none">${near ? `${near.name ?? near.station_id} · ${near.dist_km.toFixed(1)} km` : 'none in range'}</td>
-      <td><button class="linkbtn danger" data-del="${f.id}" data-name="${f.name}">Remove</button></td>
+      <td>${cell(f, 'acres', 'num')}</td>
+      <td class="none">${near ? `${esc(near.name ?? near.station_id)} · ${near.dist_km.toFixed(1)} km` : 'none in range'}</td>
+      <td><button class="linkbtn danger" data-del="${f.id}" data-name="${esc(f.name)}">Remove</button></td>
     </tr>`;
   }).join('');
+  $('farmList').innerHTML = (META.farms ?? []).map(f => `<option value="${esc(f)}">`).join('');
+
+  // Save on commit (blur or Enter), not per keystroke — every save rewrites
+  // config.json, and a half-typed farm name should never reach it.
+  t.querySelectorAll('[data-edit]').forEach(inp => {
+    const original = inp.value;
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+    inp.addEventListener('change', async () => {
+      const v = inp.value.trim();
+      if (v === original.trim()) return;
+      inp.classList.add('saving');
+      const label = META.fields.find(f => f.id === inp.dataset.id)?.name ?? inp.dataset.id;
+      const ok = await saveField({ id: inp.dataset.id, [inp.dataset.edit]: v }, 'POST',
+        `Saving ${inp.dataset.edit} for ${label}…`);
+      if (ok) msg(`Saved ${inp.dataset.edit} for ${label}.`);
+      else inp.value = original;   // leave the rejected text out of the table
+      inp.classList.remove('saving');
+    });
+  });
 
   t.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     if (META.fields.length <= 1) return msg('Keep at least one field.', true);
     if (!confirm(`Remove "${b.dataset.name}"? Its stored observations are deleted too.`)) return;
-    if (await saveField({ id: b.dataset.del }, 'DELETE')) msg(`Removed ${b.dataset.name}.`);
+    if (await saveField({ id: b.dataset.del }, 'DELETE', 'Removing…')) msg(`Removed ${b.dataset.name}.`);
   }));
 }
 
@@ -394,12 +482,14 @@ function renderFields() {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
     if (!fd.acres) delete fd.acres;
-    if (await saveField(fd)) {
+    if (!fd.farm) delete fd.farm;
+    if (await saveField(fd, 'POST', 'Saving and remapping gauges…')) {
       e.target.reset();
       msg(`Added ${fd.name}. Run "npm run backfill" to pull its history.`);
     }
   });
-  $('fieldSel').innerHTML = META.fields.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
+  renderFarmFilter();
+  refreshFieldSelect();
   $('fieldSel').addEventListener('change', load);
   $('rangeSel').addEventListener('change', load);
   $('themeBtn').addEventListener('click', () => {
@@ -409,6 +499,12 @@ function renderFields() {
     document.documentElement.setAttribute('data-theme', next);
     localStorage.setItem('rm-theme', next);
     load();
+  });
+  // Click-away closes any open checkbox popover, which <details> does not do.
+  document.addEventListener('click', e => {
+    document.querySelectorAll('details.multi[open]').forEach(d => {
+      if (!d.contains(e.target)) d.open = false;
+    });
   });
   const saved = localStorage.getItem('rm-theme');
   if (saved) document.documentElement.setAttribute('data-theme', saved);

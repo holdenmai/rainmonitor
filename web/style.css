@@ -60,6 +60,33 @@ select, .btn {
 .btn { text-decoration: none; display: inline-block; }
 .btn:hover, select:hover { border-color: var(--axis); }
 
+/* Checkbox popover for the multi-value filters. <details> carries the open
+   state and the keyboard behaviour natively, so no JS owns "is it showing". */
+.multi { position: relative; }
+.multi > summary {
+  font-size: 13px; padding: 6px 26px 6px 10px; border-radius: 7px; list-style: none;
+  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  cursor: pointer; white-space: nowrap; min-width: 118px;
+}
+.multi > summary::-webkit-details-marker { display: none; }
+.multi > summary::after {
+  content: "▾"; position: absolute; right: 9px; top: 6px; color: var(--text-muted); font-size: 11px;
+}
+.multi[open] > summary::after { content: "▴"; }
+.multi > summary:hover { border-color: var(--axis); }
+.multi-panel {
+  position: absolute; right: 0; z-index: 10; margin-top: 4px; padding: 8px; min-width: 190px;
+  max-height: 280px; overflow-y: auto; background: var(--surface-1);
+  border: 1px solid var(--axis); border-radius: 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+}
+.multi-panel label {
+  display: flex; align-items: center; gap: 7px; padding: 4px 3px;
+  font-size: 13px; color: var(--text-primary); cursor: pointer; white-space: nowrap;
+}
+.multi-panel label:hover { color: var(--series-gauge); }
+.multi-panel .sep { border-top: 1px solid var(--border); margin: 6px 0; }
+.multi-panel .none { color: var(--text-muted); font-size: 12px; padding: 2px 3px; }
+
 main { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 16px; max-width: 1180px; }
 
 /* KPI row of stat tiles — headline numbers, not a one-bar chart. */
@@ -117,6 +144,18 @@ td.none { color: var(--text-muted); }
   border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
 }
 .fieldform input:focus { outline: 2px solid var(--series-gauge); outline-offset: -1px; }
+/* Editable table cell: reads as text until focused, so the table still scans as
+   a table rather than a form. */
+.cell {
+  font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums;
+  padding: 3px 6px; width: 108px; border-radius: 5px;
+  border: 1px solid transparent; background: transparent; color: var(--text-primary);
+}
+.cell.num { text-align: right; width: 74px; }
+.cell:hover { border-color: var(--border); }
+.cell:focus { outline: none; border-color: var(--series-gauge); background: var(--plane); }
+.cell.saving { border-color: var(--warning); }
+
 .linkbtn {
   font: inherit; font-size: 12px; background: none; border: none; padding: 2px 4px;
   color: var(--series-gauge); cursor: pointer; text-decoration: underline;

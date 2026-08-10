@@ -14,6 +14,13 @@
     <p class="sub" id="subtitle">Northwest Kansas</p>
   </div>
   <div class="controls">
+    <div class="ctl">
+      <span>Farm</span>
+      <details class="multi" id="farmFilter">
+        <summary id="farmSummary">All farms</summary>
+        <div class="multi-panel" id="farmOptions"></div>
+      </details>
+    </div>
     <label class="ctl">
       <span>Field</span>
       <select id="fieldSel"></select>
@@ -98,13 +105,15 @@
     <div class="card-head">
       <div>
         <h2>Fields</h2>
-        <p class="note">Edits are written straight to <code>config.json</code> and the nearby gauges are remapped immediately. After adding a field, run <code>npm run backfill</code> to pull its history.</p>
+        <p class="note">Edits are written straight to <code>config.json</code>. Acres and farm save as soon as you leave the box; moving a field remaps its nearby gauges. After adding a field, run <code>npm run backfill</code> to pull its history.</p>
       </div>
     </div>
     <div class="table-wrap"><table id="fieldTable"><thead></thead><tbody></tbody></table></div>
+    <datalist id="farmList"></datalist>
 
     <form id="addField" class="fieldform">
       <label><span>Name</span><input name="name" placeholder="North 80" required></label>
+      <label><span>Farm <em>(optional)</em></span><input name="farm" list="farmList" placeholder="Mai Farms"></label>
       <label><span>Latitude</span><input name="lat" type="number" step="any" placeholder="39.3861" required></label>
       <label><span>Longitude</span><input name="lon" type="number" step="any" placeholder="-101.0523" required></label>
       <label><span>Acres <em>(optional)</em></span><input name="acres" type="number" step="any" placeholder="160"></label>

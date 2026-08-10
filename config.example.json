@@ -1,9 +1,10 @@
 {
   "_README": "Copy this to config.json (npm run init does it for you) and replace the fields below with your own. lat/lon are decimal degrees — longitude is NEGATIVE in the western hemisphere. Everything else has working defaults.",
 
+  "_fieldsComment": "farm is optional and free-form — group fields by operation, landlord, or whoever you scout for, and the dashboard gains a farm filter. Fields with no farm show up under \"No farm set\".",
   "fields": [
-    { "id": "north-quarter", "name": "North Quarter", "lat": 39.3861, "lon": -101.0523, "acres": 160 },
-    { "id": "south-80",      "name": "South 80",      "lat": 39.3690, "lon": -101.0300, "acres": 80 }
+    { "id": "north-quarter", "name": "North Quarter", "farm": "Home Place", "lat": 39.3861, "lon": -101.0523, "acres": 160 },
+    { "id": "south-80",      "name": "South 80",      "farm": "Home Place", "lat": 39.3690, "lon": -101.0300, "acres": 80 }
   ],
 
   "region": {

@@ -27,15 +27,30 @@ After that, `npm run ingest` is the daily job — see [Scheduling](#scheduling).
 Two ways, both writing to the same `config.json`:
 
 **From the dashboard** — `npm run serve`, scroll to **Fields**, fill in name /
-latitude / longitude. Gauges are remapped the moment you save.
+latitude / longitude. Gauges are remapped the moment you save. **Acres** and
+**Farm** are editable in place in that table: click the cell, type, tab out.
 
 **From the CLI:**
 
 ```bash
 npm run fields                                    # list what you have
 npm run add-field -- --name "North 80" --lat 39.4310 --lon -101.0490 --acres 80
+npm run update-field -- --id north-80 --acres 78 --farm "Mai Farms"
 npm run remove-field -- --id north-80
 ```
+
+### Farms
+
+Every field can carry an optional **farm** — free-form text, so it can be an
+operation, a landlord, or whoever you scout for. The dashboard grows a
+multi-select **Farm** filter that narrows the field dropdown and the all-fields
+comparison to that farm's ground; fields with no farm set stay reachable under
+"No farm set". Useful if you agronomize, custom farm, or custom harvest across
+several operations and want to see one of them at a time.
+
+Farm names are matched case-insensitively against the ones already in use, so
+`mai farms` typed into a second field joins `Mai Farms` rather than starting a
+near-duplicate.
 
 Latitude and longitude are decimal degrees. **Longitude is negative in the
 western hemisphere** — `-101.049`, not `101.049`. That is the single most common

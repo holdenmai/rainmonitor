@@ -30,7 +30,7 @@ export function slugify(name, taken = new Set()) {
   return id;
 }
 
-export function validateField({ name, lat, lon, acres }) {
+export function validateField({ name, lat, lon, acres, farm }) {
   const errors = [];
   if (!name || !String(name).trim()) errors.push('name is required');
   const la = Number(lat), lo = Number(lon);
@@ -42,7 +42,29 @@ export function validateField({ name, lat, lon, acres }) {
     errors.push('lon looks positive — western-hemisphere longitudes must be negative (e.g. -101.05)');
   if (acres !== undefined && acres !== null && acres !== '' && !(Number(acres) > 0))
     errors.push('acres must be a positive number if given');
+  if (farm !== undefined && farm !== null && String(farm).length > 60)
+    errors.push('farm name must be 60 characters or fewer');
   return errors;
+}
+
+/**
+ * Farms are a plain string on the field, matched case-insensitively but stored
+ * as typed. There is no farm registry to keep in sync: a farm exists exactly as
+ * long as some field names it, so renaming the last field off a farm retires it.
+ * Reusing the existing spelling keeps "Mai Farms" and "mai farms" from becoming
+ * two entries in the filter.
+ */
+export function normalizeFarm(cfg, farm) {
+  const t = String(farm ?? '').trim();
+  if (!t) return null;
+  const existing = cfg.fields.find(f => f.farm && f.farm.toLowerCase() === t.toLowerCase());
+  return existing ? existing.farm : t;
+}
+
+export function farmsOf(fields = []) {
+  const seen = new Map();
+  for (const f of fields) if (f.farm && !seen.has(f.farm.toLowerCase())) seen.set(f.farm.toLowerCase(), f.farm);
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -104,12 +126,14 @@ export async function autoDetectRegion(cfg, log = console.log) {
   return cfg;
 }
 
-export function addField(cfg, { name, lat, lon, acres }) {
-  const errors = validateField({ name, lat, lon, acres });
+export function addField(cfg, { name, lat, lon, acres, farm }) {
+  const errors = validateField({ name, lat, lon, acres, farm });
   if (errors.length) throw new Error(errors.join('; '));
   const id = slugify(name, new Set(cfg.fields.map(f => f.id)));
   const field = { id, name: String(name).trim(), lat: Number(lat), lon: Number(lon) };
   if (acres) field.acres = Number(acres);
+  const fm = normalizeFarm(cfg, farm);
+  if (fm) field.farm = fm;
   cfg.fields.push(field);
   return field;
 }
@@ -124,6 +148,11 @@ export function updateField(cfg, id, patch) {
   f.lat = Number(merged.lat);
   f.lon = Number(merged.lon);
   if (merged.acres) f.acres = Number(merged.acres); else delete f.acres;
+  // Match against the other fields, so a field cannot normalize against itself
+  // and pin its own old spelling when it is the one being renamed.
+  const others = { ...cfg, fields: cfg.fields.filter(x => x.id !== id) };
+  const fm = normalizeFarm(others, merged.farm);
+  if (fm) f.farm = fm; else delete f.farm;
   return f;
 }
 

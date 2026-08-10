@@ -4,7 +4,7 @@ import { join, extname, normalize } from 'node:path';
 import { openDb, syncFields } from './db.js';
 import { loadConfig, ROOT, today, addDays } from './util.js';
 import { calibration } from './calibration.js';
-import { readConfig, writeConfig, autoDetectRegion, addField, updateField, removeField } from './setup.js';
+import { readConfig, writeConfig, autoDetectRegion, addField, updateField, removeField, farmsOf } from './setup.js';
 import { discoverStations } from './stations.js';
 
 let cfg = loadConfig();
@@ -106,15 +106,22 @@ const server = createServer(async (req, res) => {
   try {
     // --- Field management (writes config.json) ---
     if (p === '/api/config/fields') {
-      if (req.method === 'GET') return json(res, { fields: cfg.fields, region: cfg.region ?? {} });
+      if (req.method === 'GET') return json(res, { fields: cfg.fields, farms: farmsOf(cfg.fields), region: cfg.region ?? {} });
       if (req.method === 'POST' || req.method === 'DELETE') {
         if (!isLocal(req)) return send(res, 403, 'text/plain', 'field editing is restricted to localhost');
         const body = await readBody(req);
         const live = readConfig();
+        // Only a moved, added or removed field changes which gauges apply. An
+        // acres or farm edit does not, and remapping there would spend several
+        // seconds of network calls to rewrite the same rows.
+        const before = live.fields.find(f => f.id === body.id);
+        let remap = true;
         try {
           if (req.method === 'DELETE') removeField(live, body.id);
-          else if (body.id) updateField(live, body.id, body);
-          else addField(live, body);
+          else if (body.id) {
+            const after = updateField(live, body.id, body);
+            remap = !before || before.lat !== after.lat || before.lon !== after.lon;
+          } else addField(live, body);
         } catch (e) {
           return send(res, 400, 'application/json', JSON.stringify({ error: e.message }));
         }
@@ -123,8 +130,8 @@ const server = createServer(async (req, res) => {
         cfg = live;
         // Remap gauges for the changed field set, and drop any pruned rows.
         syncFields(db, cfg.fields);
-        await discoverStations(db, cfg, () => {});
-        return json(res, { ok: true, fields: cfg.fields, region: cfg.region ?? {} });
+        if (remap) await discoverStations(db, cfg, () => {});
+        return json(res, { ok: true, fields: cfg.fields, farms: farmsOf(cfg.fields), region: cfg.region ?? {} });
       }
       return send(res, 405, 'text/plain', 'method not allowed');
     }
@@ -135,6 +142,7 @@ const server = createServer(async (req, res) => {
         ORDER BY fs.field_id, fs.rank`).all();
       return json(res, {
         fields: cfg.fields.map(f => ({ ...f, stations: stations.filter(s => s.field_id === f.id).slice(0, 4) })),
+        farms: farmsOf(cfg.fields),
         seasonStart: seasonStart(), growingStart: growStart(),
         lastIngest: db.prepare('SELECT MAX(ts) t FROM ingest_log').get()?.t ?? null,
       });

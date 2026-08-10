@@ -9,7 +9,7 @@ import {
 
 const [, , cmd, ...rest] = process.argv;
 
-/** --name "North 80" --lat 39.4 --lon -101.0 --acres 160 */
+/** --name "North 80" --lat 39.4 --lon -101.0 --acres 160 --farm "Mai Farms" */
 function flags(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
@@ -30,7 +30,8 @@ const usage = () => console.log(`rainmonitor
   npm run serve                start the local dashboard
 
   npm run fields                                       list your fields
-  npm run add-field -- --name "North 80" --lat 39.4 --lon -101.05 [--acres 160]
+  npm run add-field -- --name "North 80" --lat 39.4 --lon -101.05 [--acres 160] [--farm "Mai Farms"]
+  npm run update-field -- --id north-80 --acres 155 --farm "Mai Farms"
   npm run remove-field -- --id north-80
 
 Fields are easiest to manage from the dashboard: npm run serve, then "Fields".`);
@@ -69,7 +70,8 @@ async function main() {
       return;
     }
     for (const f of cfg.fields)
-      console.log(`  ${f.id.padEnd(18)} ${String(f.name).padEnd(20)} ${f.lat}, ${f.lon}${f.acres ? `  ${f.acres} ac` : ''}`);
+      console.log(`  ${f.id.padEnd(18)} ${String(f.name).padEnd(20)} ${String(f.farm ?? '—').padEnd(16)} `
+        + `${f.lat}, ${f.lon}${f.acres ? `  ${f.acres} ac` : ''}`);
     return;
   }
 

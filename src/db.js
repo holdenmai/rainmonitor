@@ -75,6 +75,16 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS obs_field_date_idx ON obs(field_id, date);
     CREATE INDEX IF NOT EXISTS stobs_date_idx ON station_obs(date);
   `);
+
+  // Added after the first release. Existing databases predate these columns, and
+  // there is no separate migration step to run — the dashboard and the daily
+  // task both open the db through here, so whichever runs first upgrades it.
+  addColumn(db, 'field', 'farm', 'TEXT');
+}
+
+function addColumn(db, table, col, decl) {
+  const have = db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === col);
+  if (!have) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
 }
 
 /**
@@ -85,9 +95,10 @@ function migrate(db) {
  * were still being tracked, with data that quietly stops updating.
  */
 export function syncFields(db, fields) {
-  const up = db.prepare(`INSERT INTO field (id,name,lat,lon,acres) VALUES (?,?,?,?,?)
-    ON CONFLICT(id) DO UPDATE SET name=excluded.name, lat=excluded.lat, lon=excluded.lon, acres=excluded.acres`);
-  for (const f of fields) up.run(f.id, f.name, f.lat, f.lon, f.acres ?? null);
+  const up = db.prepare(`INSERT INTO field (id,name,lat,lon,acres,farm) VALUES (?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET name=excluded.name, lat=excluded.lat, lon=excluded.lon,
+      acres=excluded.acres, farm=excluded.farm`);
+  for (const f of fields) up.run(f.id, f.name, f.lat, f.lon, f.acres ?? null, f.farm ?? null);
 
   const keep = new Set(fields.map(f => f.id));
   const stale = db.prepare('SELECT id, name FROM field').all().filter(r => !keep.has(r.id));
