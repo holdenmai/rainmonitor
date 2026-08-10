@@ -61,11 +61,19 @@ export async function repoInfo() {
   return info;
 }
 
-/** Uncommitted local edits. Refusing to update over them is the whole point. */
+/**
+ * Tracked files that differ from HEAD. Refusing to update over them is the
+ * whole point.
+ *
+ * `diff --name-only` rather than `status --porcelain`: porcelain's leading
+ * status column is significant whitespace, and this module trims command
+ * output, so the first filename came back with a character bitten off it.
+ * Untracked files are ignored on purpose — config.json and data/ are not
+ * tracked, and neither obstructs a fast-forward.
+ */
 async function localEdits() {
   try {
-    return (await git(['status', '--porcelain', '--untracked-files=no'], 10_000))
-      .split('\n').filter(Boolean).map(l => l.slice(3));
+    return (await git(['diff', '--name-only', 'HEAD'], 10_000)).split('\n').filter(Boolean);
   } catch {
     return [];
   }
