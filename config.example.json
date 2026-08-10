@@ -76,6 +76,12 @@
 
   "server": { "port": 8787, "host": "127.0.0.1" },
 
+  "updates": {
+    "enabled": true,
+    "checkIntervalHours": 24,
+    "_comment": "If this copy was installed with git and git is on the machine, the dashboard checks once a day whether newer code has been published, and offers a button to download it and restart. Nothing is ever applied without being asked. The update is fast-forward only and refuses outright if there are local edits, so it can never leave a merge conflict behind. Set enabled to false to stop checking."
+  },
+
   "ingest": {
     "backfillDays": 400,
     "revisitDays": 10,

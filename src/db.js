@@ -74,6 +74,12 @@ function migrate(db) {
       PRIMARY KEY (field_id, source, window, asof)
     );
 
+    -- Small facts that outlive a restart: when updates were last checked for,
+    -- and anything else that must not reset every time the machine reboots.
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS ingest_log (
       ts TEXT NOT NULL, source TEXT NOT NULL, ok INTEGER NOT NULL,
       rows INTEGER, detail TEXT
@@ -201,6 +207,15 @@ export function upsertFieldWindow(db, fieldId, source, window, asof, precipIn) {
     ON CONFLICT(field_id,source,window,asof) DO UPDATE SET
       precip_in=excluded.precip_in, updated_at=excluded.updated_at`)
     .run(fieldId, source, window, asof, precipIn);
+}
+
+export const getMeta = (db, key) =>
+  db.prepare('SELECT value FROM app_meta WHERE key = ?').get(key)?.value ?? null;
+
+export function setMeta(db, key, value) {
+  db.prepare(`INSERT INTO app_meta (key,value,updated_at) VALUES (?,?,datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
+    .run(key, String(value));
 }
 
 export function logIngest(db, source, ok, rows, detail) {

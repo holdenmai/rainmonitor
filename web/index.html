@@ -41,6 +41,17 @@
 </header>
 
 <main>
+  <div class="banner" id="updateBanner" role="status" hidden>
+    <div>
+      <strong id="updateBannerTitle"></strong>
+      <p class="note" id="updateBannerNote"></p>
+    </div>
+    <div class="jobactions">
+      <button class="btn primary" type="button" id="updateApply">Update now</button>
+      <button class="linkbtn" type="button" id="updateDetails">What's new</button>
+    </div>
+  </div>
+
   <section class="kpis" id="kpis" aria-label="Rainfall summary"></section>
 
   <section class="card">
@@ -204,6 +215,20 @@
       <button class="btn" type="submit">Add field</button>
     </form>
     <p class="note" id="fieldMsg" style="margin:8px 0 6px"></p>
+  </section>
+
+  <section class="card" id="updateCard">
+    <div class="card-head">
+      <div>
+        <h2>Software updates</h2>
+        <p class="note">Checked once a day against where this copy was installed from. Updating downloads the new code and restarts the dashboard; your fields, settings and rainfall history are untouched. It will refuse rather than overwrite local changes.</p>
+      </div>
+      <div class="jobactions">
+        <button class="btn" type="button" id="updateCheck">Check now</button>
+      </div>
+    </div>
+    <p class="jobstatus" id="updateStatus"></p>
+    <div class="table-wrap" id="updateListWrap" hidden><table id="updateTable"><thead></thead><tbody></tbody></table></div>
   </section>
 
   <p class="footer" id="footer"></p>

@@ -50,6 +50,23 @@ systemctl --user enable --now rainmonitor
 loginctl enable-linger $USER   # keeps it running when you are not logged in
 ```
 
+### Staying up to date
+
+If this copy was installed with git and git is on the machine, the dashboard
+checks once a day whether newer code has been published. When there is some, a
+notice appears at the top of the page with a **What's new** list and an **Update
+now** button that downloads it and restarts the dashboard. Your fields,
+settings and rainfall history are untouched.
+
+Nothing is ever applied without being asked. The update is fast-forward only and
+**refuses outright if the copy has local edits**, because resolving a merge
+conflict on a farm office computer is precisely the situation this is meant to
+avoid. If you have deliberately changed the code, update it by hand with git.
+
+No git, or installed from a zip? Everything else still works — the panel just
+says updates are unavailable and why. Turn the checking off entirely with
+`updates.enabled: false` in `config.json`.
+
 ### Nothing to schedule
 
 The dashboard collects the rainfall itself. Every 15 minutes it checks whether
@@ -371,6 +388,7 @@ src/region.js                 lat/lon -> state -> gauge networks
 src/ingest.js                 pull the sources
 src/derive.js                 station readings -> each field's gauge figure
 src/jobs.js                   in-dashboard scheduler + background job runner
+src/update.js                 git update check, fast-forward, restart
 src/sync.js                   export/import a date range between machines
 src/sources/                  iemre, rfcqpe, iemgauge, ksmesonet, weatherlink
 src/calibration.js            gauge-vs-grid bias (shared by CLI and dashboard)

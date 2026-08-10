@@ -1,5 +1,7 @@
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { join, extname, normalize } from 'node:path';
 import { openDb, syncFields, setStationExclusions, upsertStationObs, deleteStationObs } from './db.js';
 import { loadConfig, ROOT, today, addDays, isIsoDate, cleanPrecipIn, SOURCES } from './util.js';
@@ -13,11 +15,13 @@ import { linkManualGauges } from './stations.js';
 import { deriveField } from './derive.js';
 import { buildExport, applyImport, rederiveAfterImport } from './sync.js';
 import { createJobs } from './jobs.js';
+import { createUpdates } from './update.js';
 
 let cfg = loadConfig();
 const db = openDb();
 const WEB = join(ROOT, 'web');
 const jobs = createJobs(db, () => cfg);
+const updates = createUpdates(db, () => cfg);
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 
@@ -195,6 +199,32 @@ const server = createServer(async (req, res) => {
         return json(res, { ok: true, fields: cfg.fields, farms: farmsOf(cfg.fields), region: cfg.region ?? {}, job });
       }
       return send(res, 405, 'text/plain', 'method not allowed');
+    }
+
+    // --- Software updates, pulled from git ---
+    if (p === '/api/update') {
+      if (req.method === 'GET') {
+        // ?check=1 forces a fetch; the plain GET answers from the last one, so
+        // opening the page is never blocked on the network.
+        if (url.searchParams.get('check')) return json(res, await updates.check({ force: true }));
+        return json(res, await updates.describe());
+      }
+      if (req.method !== 'POST') return send(res, 405, 'text/plain', 'method not allowed');
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'updating is restricted to localhost');
+      if (jobs.status().running)
+        return send(res, 409, 'application/json', JSON.stringify({
+          error: 'A rainfall pull is running. Let it finish, then update.' }));
+      let result;
+      try {
+        result = await updates.apply();
+      } catch (e) {
+        return send(res, 400, 'application/json', JSON.stringify({ error: e.message }));
+      }
+      // Reply first, restart after: the browser needs this response to know to
+      // start waiting for the new process.
+      json(res, { ok: true, ...result, restarting: result.updated });
+      if (result.updated) setTimeout(restart, 250);
+      return;
     }
 
     // --- Background work: gauge mapping and the rainfall pull ---
@@ -387,7 +417,35 @@ const server = createServer(async (req, res) => {
 });
 
 const { port = 8787, host = '127.0.0.1' } = cfg.server ?? {};
+
+/**
+ * Restarting after an update hands the port from the old process to the new
+ * one, and the old socket lingers for a moment after exit. Retrying the bind
+ * covers that gap; without it the update would look like it worked and leave
+ * nothing listening.
+ */
+let bindTries = 30;
+server.on('error', e => {
+  if (e.code !== 'EADDRINUSE') throw e;
+  if (bindTries-- <= 0) {
+    console.error(`Port ${port} is already in use — another Rain Monitor is probably running.`);
+    process.exit(1);
+  }
+  setTimeout(() => server.listen(port, host), 500);
+});
+
 server.listen(port, host, () => {
   console.log(`rainmonitor -> http://${host}:${port}`);
   jobs.startScheduler();
+  updates.startScheduler();
 });
+
+/** Hand off to a fresh process, which is what actually loads the new code. */
+function restart() {
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+    cwd: ROOT, detached: true, stdio: 'ignore',
+  });
+  child.unref();
+  server.close();
+  setTimeout(() => process.exit(0), 300).unref?.();
+}

@@ -415,6 +415,96 @@ async function load() {
   $('footer').textContent = `Sources: MRMS radar QPE and PRISM via IEM reanalysis; gauges via NWS COOP/ASOS and Kansas Mesonet. Last ingest ${META.lastIngest ?? 'never'} UTC.`;
 }
 
+/* ---------- software updates ---------- */
+let updateInfo = null, updateListOpen = false;
+
+function renderUpdate() {
+  const u = updateInfo;
+  if (!u) return;
+  const banner = $('updateBanner');
+  const repo = u.repo ?? {};
+  const cur = repo.current ? `${repo.current.sha} · ${repo.current.date}` : 'unknown';
+
+  banner.hidden = !u.available;
+  if (u.available) {
+    $('updateBannerTitle').textContent =
+      `An update is ready — ${u.behind} change${u.behind === 1 ? '' : 's'} since this copy was installed.`;
+    $('updateBannerNote').textContent = u.edits?.length
+      ? `Blocked: this copy has local edits to ${u.edits.slice(0, 3).join(', ')}. Updating would overwrite them.`
+      : 'Takes a few seconds. Your fields, settings and rainfall history are not affected.';
+    $('updateApply').disabled = !!u.edits?.length;
+  }
+
+  const checked = u.lastCheckedAt ? `checked ${ago(u.lastCheckedAt)}` : 'not checked yet';
+  $('updateStatus').innerHTML =
+    !u.enabled ? '<span class="none">Update checking is switched off in config.json.</span>'
+    : u.checking ? '<span class="spinner"></span><span>Checking for updates…</span>'
+    : repo.updatable === false ? `<span class="none">${esc(repo.reason)}</span>`
+    : u.error ? `<span class="none">Could not check for updates (${esc(u.error)}) — will try again later. This copy is ${esc(cur)}.</span>`
+    : u.available ? `<span>${u.behind} update${u.behind === 1 ? '' : 's'} available. This copy is ${esc(cur)}, ${esc(checked)}.</span>`
+    : `<span class="none">Up to date — this copy is ${esc(cur)}, ${esc(checked)}.</span>`;
+
+  const show = updateListOpen && u.commits?.length;
+  $('updateListWrap').hidden = !show;
+  if (show) {
+    $('updateTable').querySelector('thead').innerHTML = '<tr><th>Change</th><th>Date</th></tr>';
+    $('updateTable').querySelector('tbody').innerHTML = u.commits.map(c =>
+      `<tr><td>${esc(c.subject)}</td><td class="none">${esc(c.date)}</td></tr>`).join('');
+  }
+}
+
+async function loadUpdate(force = false) {
+  if (force) {
+    updateInfo = { ...(updateInfo ?? {}), checking: true };
+    renderUpdate();
+  }
+  updateInfo = await fetch(`/api/update${force ? '?check=1' : ''}`).then(r => r.json()).catch(() => null);
+  renderUpdate();
+}
+
+/** Poll until the restarted server answers again, then reload onto the new code. */
+async function waitForRestart(deadlineMs = 90_000) {
+  const until = Date.now() + deadlineMs;
+  // A beat first, so we do not catch the old process still answering.
+  await new Promise(r => setTimeout(r, 1500));
+  while (Date.now() < until) {
+    try {
+      const r = await fetch('/api/update', { cache: 'no-store' });
+      if (r.ok) return true;
+    } catch { /* still down, which is expected */ }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  return false;
+}
+
+function wireUpdates() {
+  $('updateCheck').addEventListener('click', () => loadUpdate(true));
+  $('updateDetails').addEventListener('click', () => { updateListOpen = !updateListOpen; renderUpdate();
+    if (updateListOpen) $('updateCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
+
+  $('updateApply').addEventListener('click', async () => {
+    if (!confirm('Download the update and restart the dashboard? It will be back in a few seconds.')) return;
+    $('updateApply').disabled = true;
+    $('updateBannerTitle').textContent = 'Updating…';
+    $('updateBannerNote').textContent = 'Downloading the new version and restarting. This page will reload on its own.';
+    const r = await fetch('/api/update', { method: 'POST' }).then(r => r.json()).catch(() => ({ error: 'no reply' }));
+    if (r.error) {
+      $('updateBannerTitle').textContent = 'Update stopped';
+      $('updateBannerNote').textContent = r.error;
+      $('updateApply').disabled = false;
+      return;
+    }
+    if (!r.restarting) { await loadUpdate(); return; }
+    if (await waitForRestart()) location.reload();
+    else {
+      $('updateBannerTitle').textContent = 'Updated, but the dashboard has not come back yet';
+      $('updateBannerNote').textContent = 'Give it a moment and refresh this page. If it stays down, restart the computer.';
+    }
+  });
+
+  loadUpdate();
+}
+
 /* ---------- background jobs ---------- */
 let jobTimer = null, jobWasRunning = false;
 
@@ -838,6 +928,7 @@ function renderFields() {
   $('readingGauge').addEventListener('change', renderReadings);
   wireExport();
   wireJobs();
+  wireUpdates();
   const now = new Date();
   $('addReading').date.value =
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
