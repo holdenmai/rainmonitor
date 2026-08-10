@@ -415,6 +415,76 @@ async function load() {
   $('footer').textContent = `Sources: MRMS radar QPE and PRISM via IEM reanalysis; gauges via NWS COOP/ASOS and Kansas Mesonet. Last ingest ${META.lastIngest ?? 'never'} UTC.`;
 }
 
+/* ---------- background jobs ---------- */
+let jobTimer = null, jobWasRunning = false;
+
+const ago = iso => {
+  if (!iso) return null;
+  const mins = Math.round((Date.now() - Date.parse(iso.includes('T') ? iso : `${iso.replace(' ', 'T')}Z`)) / 60000);
+  if (mins < 2) return 'just now';
+  if (mins < 60) return `${mins} minutes ago`;
+  const h = Math.round(mins / 60);
+  return h < 36 ? `${h} hour${h === 1 ? '' : 's'} ago` : `${Math.round(h / 24)} days ago`;
+};
+
+async function pollJobs() {
+  const s = await fetch('/api/jobs').then(r => r.json()).catch(() => null);
+  if (!s) return;
+  const running = s.running;
+  const queued = s.queued?.length ? ` (${s.queued.length} more queued)` : '';
+
+  if (running) {
+    $('jobStatus').innerHTML = `<span class="spinner"></span><span>${esc(running.label)}`
+      + `${running.note ? ` — ${esc(running.note)}` : ''}…${queued}</span>`;
+    $('jobLog').hidden = false;
+    $('jobLog').textContent = (running.lines ?? []).join('\n');
+    $('jobLog').scrollTop = $('jobLog').scrollHeight;
+  } else {
+    const fails = Object.entries(s.last ?? {}).filter(([, v]) => !v.ok);
+    const when = ago(s.lastIngestAt);
+    $('jobStatus').innerHTML = fails.length
+      ? `<span class="warn">Last ${esc(fails[0][0])} failed: ${esc(fails[0][1].error ?? 'unknown error')}</span>`
+      : `<span class="none">${when ? `Up to date — last checked ${when}.` : 'No rainfall pulled yet.'}</span>`;
+    $('jobLog').hidden = !jobWasRunning;
+  }
+
+  // Reload the charts once, on the transition out of running: the numbers on
+  // screen are stale the moment a pull finishes.
+  if (jobWasRunning && !running) {
+    jobWasRunning = false;
+    META = await fetch('/api/fields').then(r => r.json());
+    renderFarmFilter();
+    refreshFieldSelect();
+    await load();
+  }
+  if (running) jobWasRunning = true;
+
+  // Poll only while there is something to watch, so an idle dashboard left open
+  // on a kitchen computer is not making a request every two seconds all day.
+  clearTimeout(jobTimer);
+  jobTimer = setTimeout(pollJobs, running || s.queued?.length ? 1500 : 60000);
+}
+
+async function startJob(job, extra = {}) {
+  await fetch('/api/jobs', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ job, ...extra }),
+  }).catch(() => {});
+  jobWasRunning = true;
+  clearTimeout(jobTimer);
+  pollJobs();
+}
+
+function wireJobs() {
+  $('jobIngest').addEventListener('click', () => startJob('ingest', { note: 'requested from the dashboard' }));
+  $('jobDiscover').addEventListener('click', () => startJob('discover', { note: 'requested from the dashboard' }));
+  $('jobBackfill').addEventListener('click', () => {
+    if (!confirm('Pull the past year for every field? This can take several minutes.')) return;
+    startJob('backfill', { note: 'requested from the dashboard' });
+  });
+  pollJobs();
+}
+
 /* ---------- export / import ---------- */
 const exportMsg = (t, bad) => note('exportMsg', t, bad);
 const importMsg = (t, bad) => note('importMsg', t, bad);
@@ -497,7 +567,7 @@ function wireExport() {
       ? ` Skipped data for ${r.unknownFields.length} field(s) this instance does not have (${r.unknownFields.join(', ')}) — tick the box above to create them.`
       : '';
     const disc = r.unmapped?.length
-      ? ` ${r.unmapped.length} field(s) have no gauges mapped yet (${r.unmapped.join(', ')}), so imported station readings are stored but not yet charted — run "npm run discover".`
+      ? ` ${r.unmapped.length} field(s) had no gauges mapped yet (${r.unmapped.join(', ')}) — mapping them now.`
       : '';
     importMsg(`Merged: ${bits.join(', ')}.${warn}${disc}`, !!(warn || disc));
 
@@ -616,10 +686,11 @@ async function saveExclusions(fieldId, patch) {
     body: JSON.stringify({ id: fieldId, ...patch }),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) { exMsg(body.error || `Failed (${res.status})`, true); return false; }
+  if (!res.ok) { exMsg(body.error || `Failed (${res.status})`, true); return null; }
   META = await fetch('/api/fields').then(r => r.json());
   await load();
-  return true;
+  if (body.job) { jobWasRunning = true; clearTimeout(jobTimer); pollJobs(); }
+  return body;
 }
 
 function renderExclusions(field) {
@@ -637,7 +708,7 @@ function renderExclusions(field) {
     const next = new Set(exSrc);
     if (box.checked) next.delete(box.dataset.src); else next.add(box.dataset.src);
     saveExclusions(field.id, { sources: [...next] })
-      .then(ok => { if (ok) exMsg(`${box.checked ? 'Counting' : 'Ignoring'} ${box.dataset.src} for ${field.name}.`); });
+      .then(r => { if (r) exMsg(`${box.checked ? 'Counting' : 'Ignoring'} ${box.dataset.src} for ${field.name}.`); });
   }));
 
   const st = $('stationTable');
@@ -655,9 +726,9 @@ function renderExclusions(field) {
   st.querySelectorAll('[data-sta]').forEach(box => box.addEventListener('change', () => {
     const next = new Set(exSta);
     if (box.checked) next.delete(box.dataset.sta); else next.add(box.dataset.sta);
-    saveExclusions(field.id, { stations: [...next] }).then(ok => {
-      if (ok) exMsg(`${box.checked ? 'Counting' : 'Ignoring'} ${box.dataset.sta.split('|')[1]} for ${field.name}.`
-        + (box.checked ? '' : ' Run "npm run discover" to pull in the next gauge in range.'));
+    saveExclusions(field.id, { stations: [...next] }).then(r => {
+      if (r) exMsg(`${box.checked ? 'Counting' : 'Ignoring'} ${box.dataset.sta.split('|')[1]} for ${field.name}.`
+        + (r.job ? ` ${r.job}…` : ''));
     });
   }));
 }
@@ -671,6 +742,7 @@ async function saveField(payload, method = 'POST', note = 'Saving…') {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { msg(body.error || `Failed (${res.status})`, true); return false; }
+  if (body.job) { jobWasRunning = true; clearTimeout(jobTimer); pollJobs(); }
   META = await fetch('/api/fields').then(r => r.json());
   renderFarmFilter();
   // A new field becomes the selection; an edit leaves the selection alone, so
@@ -736,9 +808,9 @@ function renderFields() {
     const fd = Object.fromEntries(new FormData(e.target));
     if (!fd.acres) delete fd.acres;
     if (!fd.farm) delete fd.farm;
-    if (await saveField(fd, 'POST', 'Saving and remapping gauges…')) {
+    if (await saveField(fd, 'POST', 'Saving…')) {
       e.target.reset();
-      msg(`Added ${fd.name}. Run "npm run backfill" to pull its history.`);
+      msg(`Added ${fd.name}. Mapping its gauges and pulling its history now — see Data collection below.`);
     }
   });
   $('addGauge').addEventListener('submit', async e => {
@@ -765,6 +837,7 @@ function renderFields() {
   });
   $('readingGauge').addEventListener('change', renderReadings);
   wireExport();
+  wireJobs();
   const now = new Date();
   $('addReading').date.value =
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;

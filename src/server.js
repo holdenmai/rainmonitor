@@ -9,13 +9,15 @@ import {
   addField, updateField, removeField, setExclusions, farmsOf,
   manualGauges, upsertManualGauge, removeManualGauge,
 } from './setup.js';
-import { discoverStations, linkManualGauges } from './stations.js';
+import { linkManualGauges } from './stations.js';
 import { deriveField } from './derive.js';
 import { buildExport, applyImport, rederiveAfterImport } from './sync.js';
+import { createJobs } from './jobs.js';
 
 let cfg = loadConfig();
 const db = openDb();
 const WEB = join(ROOT, 'web');
+const jobs = createJobs(db, () => cfg);
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 
@@ -168,25 +170,44 @@ const server = createServer(async (req, res) => {
         // acres or farm edit does not, and remapping there would spend several
         // seconds of network calls to rewrite the same rows.
         const before = live.fields.find(f => f.id === body.id);
-        let remap = true;
+        let changed = null;
         try {
           if (req.method === 'DELETE') removeField(live, body.id);
           else if (body.id) {
             const after = updateField(live, body.id, body);
-            remap = !before || before.lat !== after.lat || before.lon !== after.lon;
-          } else addField(live, body);
+            if (!before || before.lat !== after.lat || before.lon !== after.lon) changed = after;
+          } else changed = addField(live, body);
         } catch (e) {
           return send(res, 400, 'application/json', JSON.stringify({ error: e.message }));
         }
         await autoDetectRegion(live, () => {});
         writeConfig(live);
         cfg = live;
-        // Remap gauges for the changed field set, and drop any pruned rows.
         syncFields(db, cfg.fields);
-        if (remap) await discoverStations(db, cfg, () => {});
-        return json(res, { ok: true, fields: cfg.fields, farms: farmsOf(cfg.fields), region: cfg.region ?? {} });
+        // A new or moved field needs its gauges mapped and its history pulled.
+        // That used to be two npm commands the dashboard told you to go and run;
+        // it now queues here and reports progress on the page.
+        let job = null;
+        if (changed) {
+          jobs.start('newfield', { opts: { fields: [changed.id] }, note: changed.name });
+          job = `Mapping gauges and pulling history for ${changed.name}`;
+        }
+        return json(res, { ok: true, fields: cfg.fields, farms: farmsOf(cfg.fields), region: cfg.region ?? {}, job });
       }
       return send(res, 405, 'text/plain', 'method not allowed');
+    }
+
+    // --- Background work: gauge mapping and the rainfall pull ---
+    if (p === '/api/jobs') {
+      if (req.method === 'GET') return json(res, jobs.status());
+      if (req.method !== 'POST') return send(res, 405, 'text/plain', 'method not allowed');
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'starting jobs is restricted to localhost');
+      const body = await readBody(req);
+      try {
+        return json(res, jobs.start(body.job, { opts: body, note: body.note ?? 'requested from the dashboard' }));
+      } catch (e) {
+        return send(res, 400, 'application/json', JSON.stringify({ error: e.message }));
+      }
     }
 
     // --- Manual gauges: stations nothing fetches, read by hand ---
@@ -259,14 +280,20 @@ const server = createServer(async (req, res) => {
       }
       writeConfig(live);
       cfg = live;
-      // Flip the flags in place and re-derive now, so the change is visible on
-      // this reload. Promoting the next station in range needs the full station
-      // lists, which is a `npm run discover` away.
+      // Flip the flags and re-derive immediately so the page updates now, then
+      // queue a remap in the background: promoting the next station into range
+      // needs the full station catalogues, which is a slow network round trip
+      // and should not hold up a checkbox.
       const f = cfg.fields.find(x => x.id === body.id);
       setStationExclusions(db, body.id, f.exclude?.stations ?? []);
       deriveField(db, body.id, 'gauge');
       deriveField(db, body.id, 'manual');
-      return json(res, { ok: true, exclude: f.exclude ?? {} });
+      let job = null;
+      if (body.stations !== undefined) {
+        jobs.start('discover', { note: `after changing gauges for ${f.name}` });
+        job = 'Looking for another gauge in range';
+      }
+      return json(res, { ok: true, exclude: f.exclude ?? {}, job });
     }
 
     if (p === '/api/fields') {
@@ -344,6 +371,7 @@ const server = createServer(async (req, res) => {
       const unmapped = cfg.fields
         .filter(f => !db.prepare('SELECT 1 FROM field_station WHERE field_id = ? LIMIT 1').get(f.id))
         .map(f => f.name);
+      if (unmapped.length) jobs.start('discover', { note: `mapping gauges for ${unmapped.join(', ')}` });
       return json(res, { ok: true, ...result, derived, unmapped, needsDiscover: unmapped.length > 0 });
     }
 
@@ -359,4 +387,7 @@ const server = createServer(async (req, res) => {
 });
 
 const { port = 8787, host = '127.0.0.1' } = cfg.server ?? {};
-server.listen(port, host, () => console.log(`rainmonitor -> http://${host}:${port}`));
+server.listen(port, host, () => {
+  console.log(`rainmonitor -> http://${host}:${port}`);
+  jobs.startScheduler();
+});

@@ -9,18 +9,67 @@ history is yours, in a file you can back up.
 
 Built for US fields; the gridded sources cover the lower 48.
 
+**Requires Node.js 22.5 or newer** — a free download from
+[nodejs.org](https://nodejs.org) (press the LTS button). It uses the built-in
+`node:sqlite`.
+
+## Setting it up
+
+**Windows — double-click `Setup.cmd`.** That is the whole install. It checks
+Node, creates your `config.json`, sets the dashboard to start when you log in,
+puts a **Rain Monitor** shortcut on your desktop, and opens it.
+
+Then open the dashboard, scroll to **Fields**, and replace the two example
+fields with your own. Every field you add maps its own nearby gauges and pulls
+its own history by itself — there is nothing to run afterwards.
+
+To undo it all: `Setup.cmd -Remove`. Your data and settings are left alone.
+
+**macOS / Linux** — there is no installer; start the server however your system
+starts things, and it takes care of the rest:
+
 ```bash
-git clone <your-fork-url> rainmonitor && cd rainmonitor
-npm run init          # creates config.json, detects your state from field coords
-npm run serve         # open http://127.0.0.1:8787 and add your fields
-npm run discover      # map each field to its nearest rain gauges
-npm run backfill 400  # pull a year+ of history
+npm run init     # creates config.json
+npm run serve    # http://127.0.0.1:8787 — add your fields here
 ```
 
-After that, `npm run ingest` is the daily job — see [Scheduling](#scheduling).
+A systemd user service keeps it running across reboots:
 
-**Requires Node 22.5 or newer** (it uses the built-in `node:sqlite`). Check with
-`node --version`.
+```ini
+# ~/.config/systemd/user/rainmonitor.service
+[Service]
+ExecStart=/usr/bin/node /path/to/rainmonitor/src/server.js
+WorkingDirectory=/path/to/rainmonitor
+Restart=always
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user enable --now rainmonitor
+loginctl enable-linger $USER   # keeps it running when you are not logged in
+```
+
+### Nothing to schedule
+
+The dashboard collects the rainfall itself. Every 15 minutes it checks whether
+the record has gone stale — older than `ingest.intervalHours`, 6 by default —
+and pulls if it has.
+
+That is catch-up scheduling rather than clock scheduling, and it is deliberate:
+a farm computer is off as often as it is on, and a fixed 7:15 daily task on a
+machine that boots at 9 simply never runs. Whenever the dashboard is up, it
+brings the record current, including everything missed while the machine was
+off. The **Data collection** panel shows what it is doing and has buttons for
+the three jobs, so none of it needs a command prompt.
+
+The CLI still does everything, for anyone who prefers it:
+
+```bash
+npm run discover      # map each field to its nearest rain gauges
+npm run backfill 400  # pull a year+ of history
+npm run ingest        # pull recent days
+```
 
 ## Adding your fields
 
@@ -257,15 +306,22 @@ numbers will differ; run it against your own station before trusting any of it.
 
 ## Scheduling
 
-The daily job is `npm run ingest`.
+**There is nothing to schedule** — see [Nothing to schedule](#nothing-to-schedule)
+above. The dashboard pulls whenever the record is stale, so keeping it running
+is the whole job, and `Setup.cmd` makes it start at login.
 
-**Windows** — run once from an elevated PowerShell prompt:
+**Keeping it running matters.** Most sources re-fetch the last 10 days, so a
+missed run self-heals. Two do not, because they publish no archive: RFC QPE (a
+missed *day* is gone) and the WeatherLink NOAA report (a missed *month* is
+gone). Running it on a second computer covers the first one's downtime — see
+[Running it on more than one computer](#running-it-on-more-than-one-computer).
+
+If you would rather drive it from the operating system's scheduler, set
+`ingest.auto` to `false` in `config.json` and run `npm run ingest` on a timer:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\register-task.ps1
+Setup.cmd -IngestTask     # Windows: daily at 07:15, logged in or not
 ```
-
-**macOS / Linux** — `crontab -e`:
 
 ```cron
 15 7 * * * cd /path/to/rainmonitor && /usr/bin/node src/cli.js ingest >> ingest.log 2>&1
@@ -273,10 +329,6 @@ powershell -ExecutionPolicy Bypass -File scripts\register-task.ps1
 
 7:15 local is deliberate: COOP observers read at 7am, the RFC QPE daily product
 closes at 12Z, and the analyses need a few minutes to publish.
-
-**Do not skip this.** Most sources re-fetch the last 10 days, so a missed run
-self-heals. Two do not, because they publish no archive: RFC QPE (a missed *day*
-is gone) and the WeatherLink NOAA report (a missed *month* is gone).
 
 ## Limitations
 
@@ -309,6 +361,8 @@ row per field/date/source, so adding a `mrms1km` source is purely additive.
 ## Layout
 
 ```
+Setup.cmd                     double-click installer (Windows)
+scripts/setup.ps1             what it runs: autostart, shortcut, config
 config.example.json           template; npm run init copies it to config.json
 config.json                   YOUR setup — gitignored, never committed
 src/cli.js                    init | discover | ingest | backfill | export | import
@@ -316,6 +370,7 @@ src/setup.js                  config read/write, field + gauge validation
 src/region.js                 lat/lon -> state -> gauge networks
 src/ingest.js                 pull the sources
 src/derive.js                 station readings -> each field's gauge figure
+src/jobs.js                   in-dashboard scheduler + background job runner
 src/sync.js                   export/import a date range between machines
 src/sources/                  iemre, rfcqpe, iemgauge, ksmesonet, weatherlink
 src/calibration.js            gauge-vs-grid bias (shared by CLI and dashboard)

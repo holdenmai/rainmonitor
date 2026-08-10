@@ -13,15 +13,26 @@ const years = (s, e) => {
   return out;
 };
 
-export async function ingest(db, cfg, { sdate, edate = today(), log = console.log } = {}) {
+/**
+ * `onlyFields` narrows the pull to a few field ids — used when one field is
+ * added and needs its history, so a new quarter section costs one field's worth
+ * of requests instead of re-pulling a year for the whole farm. The field table
+ * is still synced against the whole config, or scoping a run would prune every
+ * field it was not looking at.
+ */
+export async function ingest(db, cfg, { sdate, edate = today(), log = console.log, onlyFields = null } = {}) {
   if (!sdate) sdate = addDays(edate, -(cfg.ingest?.revisitDays ?? 10));
   const removed = syncFields(db, cfg.fields);
   for (const r of removed) log(`  [prune] removed field "${r.name}" — no longer in config.json`);
-  log(`Ingesting ${sdate} -> ${edate} (${daysBetween(sdate, edate) + 1} days) for ${cfg.fields.length} fields`);
+
+  const only = onlyFields?.length ? new Set(onlyFields) : null;
+  const fields = only ? cfg.fields.filter(f => only.has(f.id)) : cfg.fields;
+  if (!fields.length) return log('Nothing to ingest — no matching fields.');
+  log(`Ingesting ${sdate} -> ${edate} (${daysBetween(sdate, edate) + 1} days) for ${fields.length} field(s)`);
 
   // --- Gridded: one request per field ---
   if (cfg.sources.iemre?.enabled) {
-    for (const f of cfg.fields) {
+    for (const f of fields) {
       try {
         const rows = await fetchIemre(f.lat, f.lon, sdate, edate);
         for (const r of rows) {
@@ -54,7 +65,7 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
     // dayOffset here if the peak correlation lands off lag 0.
     const stamp = addDays(edate, rq.dayOffset ?? -1);
     let got = 0, missed = 0;
-    for (const f of cfg.fields) {
+    for (const f of fields) {
       try {
         const v = await identifyPoint(f.lon, f.lat, LAYERS.day1);
         if (v !== null) { upsertObs(db, f.id, stamp, 'rfcqpe', v, `RFC QPE 4km, 24h ending 12Z`); got++; }
@@ -69,7 +80,7 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
       }
     }
     logIngest(db, 'rfcqpe', missed === 0, got, missed ? `${missed} field(s) returned no value` : null);
-    log(`  [rfcqpe] ${got}/${cfg.fields.length} fields for ${stamp}` + (missed ? `, ${missed} missing` : ''));
+    log(`  [rfcqpe] ${got}/${fields.length} fields for ${stamp}` + (missed ? `, ${missed} missing` : ''));
   }
 
   // --- Gauges: fetch each station once, then map to every field that uses it ---
@@ -77,7 +88,8 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
   // and it means turning one back on for a field restores its whole history
   // instead of leaving a hole from the day it was switched off.
   const links = db.prepare(`SELECT field_id, network, station_id, dist_km FROM field_station
-    WHERE network <> 'MANUAL' ORDER BY field_id, rank`).all();
+    WHERE network <> 'MANUAL' ORDER BY field_id, rank`).all()
+    .filter(l => !only || only.has(l.field_id));
   const wanted = new Map();
   for (const l of links) wanted.set(`${l.network}|${l.station_id}`, l);
 
@@ -125,7 +137,7 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
   // Derive each field's gauge value from everything stored, not just from what
   // this run fetched — so a station that went quiet keeps the history it already
   // reported, and an excluded gauge drops out of the past as well as the future.
-  const counts = deriveAll(db, cfg.fields);
+  const counts = deriveAll(db, fields);
   log(`  [derive] ${counts.gauge} gauge days, ${counts.manual} manual days`);
 
   log('Done.');

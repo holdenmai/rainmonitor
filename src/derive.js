@@ -1,4 +1,4 @@
-import { upsertObs } from './db.js';
+import { upsertObs, transact } from './db.js';
 
 /**
  * A field's daily gauge figure is derived, not fetched: it is whichever linked
@@ -27,18 +27,20 @@ export function deriveField(db, fieldId, kind = 'gauge') {
   // Full rebuild, not an upsert pass: an exclusion has to be able to *remove* a
   // day's value. Upserting alone would leave the excluded gauge's old readings
   // sitting in the chart forever, still attributed to a gauge that no longer
-  // counts.
-  db.prepare('DELETE FROM obs WHERE field_id = ? AND source = ?').run(fieldId, source);
-
-  let last = null, n = 0;
-  for (const r of rows) {
-    if (r.date === last) continue;   // ordered by distance, so the first row for a date is the nearest
-    last = r.date;
-    upsertObs(db, fieldId, r.date, source, r.precip_in,
-      `${r.station_id} (${r.network}) ${r.dist_km.toFixed(1)} km`);
-    n++;
-  }
-  return n;
+  // counts. One transaction, so the gap between the delete and the re-insert is
+  // never visible to the dashboard reading alongside it.
+  return transact(db, () => {
+    db.prepare('DELETE FROM obs WHERE field_id = ? AND source = ?').run(fieldId, source);
+    let last = null, n = 0;
+    for (const r of rows) {
+      if (r.date === last) continue;   // ordered by distance, so the first row for a date is the nearest
+      last = r.date;
+      upsertObs(db, fieldId, r.date, source, r.precip_in,
+        `${r.station_id} (${r.network}) ${r.dist_km.toFixed(1)} km`);
+      n++;
+    }
+    return n;
+  });
 }
 
 export function deriveAll(db, fields, kinds = ['gauge', 'manual']) {

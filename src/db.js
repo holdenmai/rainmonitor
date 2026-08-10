@@ -8,6 +8,11 @@ export function openDb(path = join(ROOT, 'data', 'rain.db')) {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
+  // The dashboard now runs its own collection, so a hand-run `npm run ingest`
+  // or a leftover scheduled task is a second writer. WAL allows one at a time;
+  // without a busy timeout the loser fails outright instead of waiting the
+  // fraction of a second these writes actually take.
+  db.exec('PRAGMA busy_timeout = 10000');
   migrate(db);
   return db;
 }
@@ -111,6 +116,27 @@ export function syncFields(db, fields) {
     db.prepare('DELETE FROM field WHERE id = ?').run(s.id);
   }
   return stale;
+}
+
+/**
+ * Run fn as one transaction, unless a caller already opened one.
+ *
+ * Batched writes need this for two reasons: thousands of individual commits are
+ * slow, and a rebuild that deletes before it re-inserts is briefly a field with
+ * no data at all — which a dashboard reading the database at that moment would
+ * happily draw as a dry season.
+ */
+export function transact(db, fn) {
+  if (db.isTransaction) return fn();
+  db.exec('BEGIN');
+  try {
+    const out = fn();
+    db.exec('COMMIT');
+    return out;
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch { /* the failure that matters is the original */ }
+    throw e;
+  }
 }
 
 export function upsertStation(db, s) {

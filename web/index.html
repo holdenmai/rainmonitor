@@ -104,6 +104,22 @@
     <p class="note" id="exMsg" style="margin:8px 0 6px"></p>
   </section>
 
+  <section class="card" id="jobCard">
+    <div class="card-head">
+      <div>
+        <h2>Data collection</h2>
+        <p class="note">This keeps itself up to date while the dashboard is running — it checks every 15 minutes and pulls whenever the record has gone stale, including catching up after the computer has been off. Nothing here needs a command prompt.</p>
+      </div>
+      <div class="jobactions">
+        <button class="btn" type="button" id="jobIngest">Check for new rainfall</button>
+        <button class="btn" type="button" id="jobDiscover">Re-map gauges</button>
+        <button class="btn" type="button" id="jobBackfill">Pull past year</button>
+      </div>
+    </div>
+    <p class="jobstatus" id="jobStatus"></p>
+    <pre class="joblog" id="jobLog" hidden></pre>
+  </section>
+
   <section class="card">
     <div class="card-head">
       <div>
@@ -173,7 +189,7 @@
     <div class="card-head">
       <div>
         <h2>Fields</h2>
-        <p class="note">Edits are written straight to <code>config.json</code>. Acres and farm save as soon as you leave the box; moving a field remaps its nearby gauges. After adding a field, run <code>npm run backfill</code> to pull its history.</p>
+        <p class="note">Acres and farm save as soon as you leave the box. Adding or moving a field maps its nearby gauges and pulls its history automatically — watch it happen under Data collection below.</p>
       </div>
     </div>
     <div class="table-wrap"><table id="fieldTable"><thead></thead><tbody></tbody></table></div>

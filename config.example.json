@@ -79,6 +79,10 @@
   "ingest": {
     "backfillDays": 400,
     "revisitDays": 10,
-    "_revisitComment": "Re-fetch the last N days every run. PRISM and COOP reports get revised after publication, so recent days are not final."
+    "_revisitComment": "Re-fetch the last N days every run. PRISM and COOP reports get revised after publication, so recent days are not final.",
+
+    "auto": true,
+    "intervalHours": 6,
+    "_autoComment": "The dashboard collects rainfall itself while it is running: every 15 minutes it checks whether the last run is older than intervalHours and pulls if so. Catch-up rather than clock scheduling, because a farm computer is off as often as it is on and a fixed 7:15 task on a machine that boots at 9 simply never runs. Set auto to false only if you would rather drive it from a scheduled task and `npm run ingest`."
   }
 }
