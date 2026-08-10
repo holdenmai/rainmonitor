@@ -1,9 +1,14 @@
-const SERIES = [
+const ALL_SERIES = [
   { key: 'gauge',  label: 'Rain gauge',   color: 'var(--series-gauge)',  note: 'nearest reporting station' },
+  { key: 'manual', label: 'Manual gauge', color: 'var(--series-manual)', note: 'read by hand' },
   { key: 'rfcqpe', label: 'RFC QPE 4km',  color: 'var(--series-rfcqpe)', note: 'NWS multi-sensor, finest grid here' },
   { key: 'mrms',   label: 'Radar QPE',    color: 'var(--series-mrms)',   note: 'MRMS via IEM, ~12km' },
   { key: 'prism',  label: 'PRISM',        color: 'var(--series-prism)',  note: '4km climate analysis' },
 ];
+// What is actually drawn. Narrowed to the sources in play, so a farm with no
+// hand-read gauge does not get a fifth legend entry, a fifth bar slot and a
+// permanent "no data yet" for a source it does not have.
+let SERIES = ALL_SERIES;
 const SVG = 'http://www.w3.org/2000/svg';
 const el = (n, a = {}, kids = []) => {
   const e = document.createElementNS(SVG, n);
@@ -85,7 +90,8 @@ function drawDaily(svg, rows, binLabel) {
       showTip(e, r.date, SERIES.map(s => ({
         k: `<span class="dot" style="background:${s.color}"></span>${s.label}`,
         v: has(r[s.key]) ? `${fmt(r[s.key])}"` : 'no report',
-      })), r.gauge_src ? `Gauge: ${r.gauge_src}` : null);
+      })), [r.gauge_src && `Gauge: ${r.gauge_src}`, r.manual_src && `Manual: ${r.manual_src}`]
+        .filter(Boolean).join('<br>') || null);
     });
     band.addEventListener('mouseleave', () => { band.classList.remove('on'); hideTip(); });
 
@@ -234,7 +240,7 @@ const $ = id => document.getElementById(id);
 /* ---------- farm filter ---------- */
 // Empty set means "all farms" — an explicit all-selected state would silently
 // stop including new farms as they are added.
-const NO_FARM = ' none';
+const NO_FARM = '__no_farm__';
 let farmSel = new Set();
 try { farmSel = new Set(JSON.parse(localStorage.getItem('rm-farms') || '[]')); } catch { /* ignore */ }
 
@@ -290,6 +296,11 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 async function load() {
   const fieldId = $('fieldSel').value;
   const days = Number($('rangeSel').value);
+  // Scoped to the field on screen, not to the config: a manual gauge eight
+  // miles away is a source this field simply does not have, and listing it as
+  // "no data yet" reads as a gauge that has stopped reporting.
+  const hasManual = f => (f?.stations ?? []).some(s => s.network === 'MANUAL' && !s.excluded);
+  SERIES = ALL_SERIES.filter(s => s.key !== 'manual' || hasManual(META.fields.find(f => f.id === fieldId)));
   const [{ rows }, { summaries }, cal] = await Promise.all([
     fetch(`/api/series?field=${fieldId}&days=${days}`).then(r => r.json()),
     fetch('/api/summary').then(r => r.json()),
@@ -310,11 +321,15 @@ async function load() {
     const r = fine ? d.rfcqpe : d.mrms;
     const src = fine ? 'RFC QPE 4km' : 'Radar QPE ~12km';
     const col = fine ? 'var(--series-rfcqpe)' : 'var(--series-mrms)';
+    // The hand-read line only appears once a manual gauge covers this field —
+    // a permanent "manual no report" would read as a gauge that is failing.
+    const manual = SERIES.some(s => s.key === 'manual') && has(d.manual)
+      ? `<div class="meta"><span class="swatch" style="background:var(--series-manual)"></span>manual ${d.manual.toFixed(2)}"</div>` : '';
     return `<div class="tile"><div class="label">${label}</div>
       <div class="value">${has(r) ? r.toFixed(2) : '—'}<span class="unit">in</span></div>
       <div class="meta"><span class="swatch" style="background:${col}"></span>${src}</div>
       <div class="meta"><span class="swatch" style="background:var(--series-gauge)"></span>gauge ${has(g) ? g.toFixed(2) + '"' : 'no report'}</div>
-      ${extra ? `<div class="meta">${extra}</div>` : ''}</div>`;
+      ${manual}${extra ? `<div class="meta">${extra}</div>` : ''}</div>`;
   };
   const dry = me.days_since_rain;
   $('kpis').innerHTML =
@@ -398,6 +413,95 @@ async function load() {
     field.acres ? `${field.acres} ac` : null,
   ].filter(Boolean).join(' · ');
   $('footer').textContent = `Sources: MRMS radar QPE and PRISM via IEM reanalysis; gauges via NWS COOP/ASOS and Kansas Mesonet. Last ingest ${META.lastIngest ?? 'never'} UTC.`;
+}
+
+/* ---------- manual gauges ---------- */
+const gaugeMsg = (t, bad) => note('gaugeMsg', t, bad);
+
+async function refreshGauges() {
+  META = await fetch('/api/fields').then(r => r.json());
+  await renderGauges();
+  await load();
+}
+
+async function saveGauge(payload, method = 'POST') {
+  gaugeMsg('Saving…');
+  const res = await fetch('/api/config/gauges', {
+    method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { gaugeMsg(body.error || `Failed (${res.status})`, true); return null; }
+  await refreshGauges();
+  return body;
+}
+
+async function renderGauges() {
+  const gauges = META.gauges ?? [];
+  const t = $('gaugeTable');
+  t.querySelector('thead').innerHTML =
+    '<tr><th>Gauge</th><th>Latitude</th><th>Longitude</th><th>Range</th><th>Fields it covers</th><th>Readings</th><th></th></tr>';
+
+  const counts = {};
+  for (const r of (await fetch('/api/readings?days=5000').then(r => r.json())).readings)
+    counts[r.station_id] = (counts[r.station_id] ?? 0) + 1;
+  // Which fields a gauge reaches comes from the links the server already
+  // computed, so the panel cannot disagree with what the charts actually use.
+  const covers = g => META.fields
+    .filter(f => (f.stations ?? []).some(s => s.network === 'MANUAL' && s.station_id === g.id && !s.excluded))
+    .map(f => f.name);
+
+  t.querySelector('tbody').innerHTML = gauges.length ? gauges.map(g => {
+    const on = covers(g);
+    return `<tr>
+      <td>${esc(g.name)}</td><td>${g.lat.toFixed(6)}</td><td>${g.lon.toFixed(6)}</td>
+      <td class="${g.maxDistanceKm ? '' : 'none'}">${g.maxDistanceKm ? `${g.maxDistanceKm} km` : 'default'}</td>
+      <td class="none">${on.length ? esc(on.join(', ')) : 'no field within range'}</td>
+      <td>${counts[g.id] ?? 0}</td>
+      <td><button class="linkbtn danger" data-delgauge="${esc(g.id)}" data-name="${esc(g.name)}">Remove</button></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" class="none">None yet — add the gauge you read by hand below.</td></tr>';
+
+  t.querySelectorAll('[data-delgauge]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm(`Remove "${b.dataset.name}"? Its readings are kept, so adding it back restores them.`)) return;
+    const r = await saveGauge({ id: b.dataset.delgauge }, 'DELETE');
+    if (r) gaugeMsg(`Removed ${b.dataset.name}. ${r.keptReadings} reading(s) kept in the database.`);
+  }));
+
+  const sel = $('readingGauge');
+  const keep = sel.value;
+  sel.innerHTML = gauges.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
+  if (gauges.some(g => g.id === keep)) sel.value = keep;
+  $('addReading').hidden = !gauges.length;
+
+  await renderReadings();
+}
+
+async function renderReadings() {
+  const gauge = $('readingGauge').value;
+  const t = $('readingTable');
+  if (!gauge) { t.querySelector('thead').innerHTML = ''; t.querySelector('tbody').innerHTML = ''; return; }
+  const { readings } = await fetch(`/api/readings?gauge=${encodeURIComponent(gauge)}&days=400`).then(r => r.json());
+  t.querySelector('thead').innerHTML = '<tr><th>Date</th><th>Inches</th><th>Entered</th><th></th></tr>';
+  t.querySelector('tbody').innerHTML = readings.length ? readings.map(r =>
+    `<tr><td>${r.date}</td><td>${r.precip_in.toFixed(2)}</td><td class="none">${r.updated_at} UTC</td>
+     <td><button class="linkbtn danger" data-delread="${r.date}">Delete</button></td></tr>`).join('')
+    : '<tr><td colspan="4" class="none">No readings yet for this gauge.</td></tr>';
+
+  t.querySelectorAll('[data-delread]').forEach(b => b.addEventListener('click', async () => {
+    // Blank, not zero: deleting has to mean "no reading", never "it stayed dry".
+    await postReading({ gauge, date: b.dataset.delread, precip_in: '' });
+    gaugeMsg(`Deleted the ${b.dataset.delread} reading.`);
+  }));
+}
+
+async function postReading(payload) {
+  const res = await fetch('/api/readings', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { gaugeMsg(body.error || `Failed (${res.status})`, true); return false; }
+  await refreshGauges();
+  return true;
 }
 
 /* ---------- per-field exclusions ---------- */
@@ -543,6 +647,35 @@ function renderFields() {
       msg(`Added ${fd.name}. Run "npm run backfill" to pull its history.`);
     }
   });
+  $('addGauge').addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    if (!fd.maxDistanceKm) delete fd.maxDistanceKm;
+    if (await saveGauge(fd)) {
+      e.target.reset();
+      gaugeMsg(`Added ${fd.name}. It now covers any field within range — enter its readings below.`);
+    }
+  });
+
+  $('addReading').addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    if (await postReading(fd)) {
+      const kept = fd.date;
+      e.target.reset();
+      // Keep the date, clear the amount: readings are usually caught up a run of
+      // days at a time, and retyping the date every line is the tedious part.
+      e.target.date.value = kept;
+      gaugeMsg(`Saved ${Number(fd.precip_in).toFixed(2)}" for ${kept}.`);
+    }
+  });
+  $('readingGauge').addEventListener('change', renderReadings);
+  const now = new Date();
+  $('addReading').date.value =
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  $('addReading').date.max = $('addReading').date.value;
+  await renderGauges();
+
   renderFarmFilter();
   refreshFieldSelect();
   $('fieldSel').addEventListener('change', load);

@@ -1,7 +1,35 @@
 import { haversineKm } from './util.js';
 import { fetchNetworkStations } from './sources/iemgauge.js';
 import { fetchKsStations } from './sources/ksmesonet.js';
-import { upsertStation, setFieldStations } from './db.js';
+import { upsertStation, setFieldStations, setFieldStationsForNetwork } from './db.js';
+import { manualGauges } from './setup.js';
+
+/**
+ * Map hand-read gauges to fields by distance.
+ *
+ * Kept separate from `discoverStations` and touching only the MANUAL rows,
+ * because adding a gauge you read yourself should not depend on the internet.
+ * A full rediscovery would fetch three station catalogues to answer a question
+ * that is pure arithmetic on coordinates already in `config.json`.
+ */
+export function linkManualGauges(db, cfg, log = () => {}) {
+  const sec = cfg.sources?.manual;
+  const gauges = sec?.enabled === false ? [] : manualGauges(cfg);
+  for (const g of gauges) upsertStation(db, { ...g, network: 'MANUAL' });
+
+  for (const f of cfg.fields) {
+    const excluded = new Set(f.exclude?.stations ?? []);
+    const near = gauges
+      .filter(g => Number.isFinite(g.lat) && Number.isFinite(g.lon))
+      .map(g => ({ station_id: g.id, dist_km: haversineKm(f.lat, f.lon, g.lat, g.lon), range: g.maxDistanceKm }))
+      .filter(g => g.dist_km <= (g.range ?? sec?.maxDistanceKm ?? 25))
+      .sort((a, b) => a.dist_km - b.dist_km)
+      .slice(0, sec?.maxStations ?? 2)
+      .map(g => ({ ...g, excluded: excluded.has(`MANUAL|${g.station_id}`) ? 1 : 0 }));
+    setFieldStationsForNetwork(db, f.id, 'MANUAL', near);
+    if (near.length) log(`  ${f.name}: manual ${near.map(g => `${g.station_id} @ ${g.dist_km.toFixed(1)} km`).join(', ')}`);
+  }
+}
 
 /**
  * Build the field -> nearby-gauge mapping. Run this once, and again whenever
@@ -79,4 +107,7 @@ export async function discoverStations(db, cfg, log = console.log) {
         + (links.length > counted.length ? ` (${links.length - counted.length} excluded)` : '')
         + (counted[0] ? ` (nearest ${counted[0].station_id} @ ${counted[0].dist_km.toFixed(1)} km)` : ' — none in range, widen maxDistanceKm'));
   }
+
+  // After the wipe-and-rebuild above, which clears MANUAL links along with the rest.
+  linkManualGauges(db, cfg, log);
 }

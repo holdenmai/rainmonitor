@@ -125,6 +125,13 @@ export function setFieldStations(db, fieldId, links) {
   links.forEach((l, i) => ins.run(fieldId, l.network, l.station_id, l.dist_km, i + 1, l.excluded ? 1 : 0));
 }
 
+/** Replace one network's links for a field, leaving the other networks alone. */
+export function setFieldStationsForNetwork(db, fieldId, network, links) {
+  db.prepare('DELETE FROM field_station WHERE field_id = ? AND network = ?').run(fieldId, network);
+  const ins = db.prepare('INSERT INTO field_station (field_id,network,station_id,dist_km,rank,excluded) VALUES (?,?,?,?,?,?)');
+  links.forEach((l, i) => ins.run(fieldId, network, l.station_id, l.dist_km, i + 1, l.excluded ? 1 : 0));
+}
+
 /** Apply a field's station exclusions to links already in the table. */
 export function setStationExclusions(db, fieldId, excludedKeys) {
   const ex = new Set(excludedKeys ?? []);
@@ -147,6 +154,11 @@ export function upsertStationObs(db, network, stationId, date, precipIn) {
     ON CONFLICT(network,station_id,date) DO UPDATE SET
       precip_in=excluded.precip_in, updated_at=excluded.updated_at`)
     .run(network, stationId, date, precipIn);
+}
+
+export function deleteStationObs(db, network, stationId, date) {
+  return db.prepare('DELETE FROM station_obs WHERE network=? AND station_id=? AND date=?')
+    .run(network, stationId, date).changes;
 }
 
 export function upsertStationMonthly(db, network, stationId, month, precipIn, maxDayIn) {

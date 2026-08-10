@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rain Monitor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1.5 3.8 8a4.7 4.7 0 1 0 8.4 0z' fill='%232a78d6'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body class="viz-root">
@@ -101,6 +102,33 @@
     <div class="toggles" id="sourceToggles"></div>
     <div class="table-wrap"><table id="stationTable"><thead></thead><tbody></tbody></table></div>
     <p class="note" id="exMsg" style="margin:8px 0 6px"></p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Manual gauges</h2>
+        <p class="note">Gauges you read yourself — the stick by the weather station, a neighbour's gauge near a field. Nothing fetches these, so they are never overwritten by an ingest. They rank by distance like any other gauge and are charted as their own series, so they stay an independent check rather than getting averaged into the automatic number.</p>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="gaugeTable"><thead></thead><tbody></tbody></table></div>
+
+    <form id="addGauge" class="fieldform">
+      <label><span>Gauge name</span><input name="name" placeholder="Stick gauge at the shop" required></label>
+      <label><span>Latitude</span><input name="lat" type="number" step="any" placeholder="38.7711" required></label>
+      <label><span>Longitude</span><input name="lon" type="number" step="any" placeholder="-101.6772" required></label>
+      <label><span>Covers within <em>(km, optional)</em></span><input name="maxDistanceKm" type="number" step="any" min="0" placeholder="25"></label>
+      <button class="btn" type="submit">Add gauge</button>
+    </form>
+
+    <form id="addReading" class="fieldform">
+      <label><span>Reading for</span><select name="gauge" id="readingGauge"></select></label>
+      <label><span>Date</span><input name="date" type="date" required></label>
+      <label><span>Inches</span><input name="precip_in" type="number" step="0.01" min="0" placeholder="0.35" required></label>
+      <button class="btn" type="submit">Save reading</button>
+    </form>
+    <p class="note" id="gaugeMsg" style="margin:8px 0 6px"></p>
+    <div class="table-wrap"><table id="readingTable"><thead></thead><tbody></tbody></table></div>
   </section>
 
   <section class="card">

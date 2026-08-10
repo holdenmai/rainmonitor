@@ -20,7 +20,15 @@ export function haversineKm(lat1, lon1, lat2, lon2) {
 export const MM_TO_IN = 1 / 25.4;
 
 /** Every per-field daily series stored in `obs`. Order is display order. */
-export const SOURCES = ['gauge', 'rfcqpe', 'mrms', 'prism', 'iemre'];
+export const SOURCES = ['gauge', 'manual', 'rfcqpe', 'mrms', 'prism', 'iemre'];
+
+/** YYYY-MM-DD, and a real calendar date — not 2026-02-31. */
+export function isIsoDate(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''))) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+}
 
 /** ISO date (YYYY-MM-DD) helpers, all in local calendar terms. */
 export function isoDate(d) {

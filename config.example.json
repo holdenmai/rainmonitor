@@ -44,6 +44,15 @@
       "maxDistanceKm": 70
     },
 
+    "manual": {
+      "enabled": true,
+      "label": "Manual gauges",
+      "_comment": "Gauges somebody reads by hand — a stick gauge by the shop, a neighbour's gauge near a field. Nothing fetches these; readings are typed into the dashboard and are never overwritten by an ingest. They rank by distance like any other station but are charted as their own series, so they stay an independent check instead of being averaged into the automatic gauge figure. Add them from the dashboard rather than by hand.",
+      "maxStations": 2,
+      "maxDistanceKm": 25,
+      "gauges": []
+    },
+
     "weatherlink": {
       "enabled": false,
       "label": "On-farm weather station",

@@ -1,14 +1,15 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, extname, normalize } from 'node:path';
-import { openDb, syncFields, setStationExclusions } from './db.js';
-import { loadConfig, ROOT, today, addDays, SOURCES } from './util.js';
+import { openDb, syncFields, setStationExclusions, upsertStationObs, deleteStationObs } from './db.js';
+import { loadConfig, ROOT, today, addDays, isIsoDate, cleanPrecipIn, SOURCES } from './util.js';
 import { calibration } from './calibration.js';
 import {
   readConfig, writeConfig, autoDetectRegion,
   addField, updateField, removeField, setExclusions, farmsOf,
+  manualGauges, upsertManualGauge, removeManualGauge,
 } from './setup.js';
-import { discoverStations } from './stations.js';
+import { discoverStations, linkManualGauges } from './stations.js';
 import { deriveField } from './derive.js';
 
 let cfg = loadConfig();
@@ -39,11 +40,13 @@ function series(fieldId, since) {
   const rows = db.prepare(`
     SELECT date,
       MAX(CASE WHEN source='gauge'  THEN precip_in END) gauge,
+      MAX(CASE WHEN source='manual' THEN precip_in END) manual,
       MAX(CASE WHEN source='rfcqpe' THEN precip_in END) rfcqpe,
       MAX(CASE WHEN source='mrms'   THEN precip_in END) mrms,
       MAX(CASE WHEN source='prism'  THEN precip_in END) prism,
       MAX(CASE WHEN source='iemre'  THEN precip_in END) iemre,
-      MAX(CASE WHEN source='gauge'  THEN detail    END) gauge_src
+      MAX(CASE WHEN source='gauge'  THEN detail    END) gauge_src,
+      MAX(CASE WHEN source='manual' THEN detail    END) manual_src
     FROM obs WHERE field_id = ? AND date >= ?
     GROUP BY date ORDER BY date`).all(fieldId, since);
 
@@ -51,6 +54,7 @@ function series(fieldId, since) {
   if (ex.size) for (const r of rows) {
     for (const s of ex) r[s] = null;
     if (ex.has('gauge')) r.gauge_src = null;
+    if (ex.has('manual')) r.manual_src = null;
   }
   return rows;
 }
@@ -85,17 +89,19 @@ function summary(fieldId) {
 function csv(fieldId, since) {
   const fields = fieldId ? [fieldId] : cfg.fields.map(f => f.id);
   const names = Object.fromEntries(cfg.fields.map(f => [f.id, f.name]));
-  const lines = ['field_id,field_name,date,gauge_in,rfcqpe_4km_in,mrms_in,prism_in,iemre_in,gauge_station'];
+  const farms = Object.fromEntries(cfg.fields.map(f => [f.id, f.farm ?? '']));
+  const lines = ['field_id,field_name,farm,date,gauge_in,manual_in,rfcqpe_4km_in,mrms_in,prism_in,iemre_in,gauge_station,manual_gauge'];
   for (const id of fields) {
     for (const r of series(id, since)) {
       const q = v => (v === null || v === undefined ? '' : v);
-      lines.push([id, `"${(names[id] || '').replace(/"/g, '""')}"`, r.date,
-        q(r.gauge), q(r.rfcqpe), q(r.mrms), q(r.prism), q(r.iemre),
-        `"${(r.gauge_src || '').replace(/"/g, '""')}"`].join(','));
+      lines.push([id, csvq(names[id]), csvq(farms[id]), r.date,
+        q(r.gauge), q(r.manual), q(r.rfcqpe), q(r.mrms), q(r.prism), q(r.iemre),
+        csvq(r.gauge_src), csvq(r.manual_src)].join(','));
     }
   }
   return lines.join('\n');
 }
+const csvq = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
 const send = (res, code, type, body) => {
   res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
@@ -155,6 +161,63 @@ const server = createServer(async (req, res) => {
       return send(res, 405, 'text/plain', 'method not allowed');
     }
 
+    // --- Manual gauges: stations nothing fetches, read by hand ---
+    if (p === '/api/config/gauges') {
+      if (req.method === 'GET') return json(res, { gauges: manualGauges(cfg) });
+      if (req.method !== 'POST' && req.method !== 'DELETE') return send(res, 405, 'text/plain', 'method not allowed');
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'gauge editing is restricted to localhost');
+      const body = await readBody(req);
+      const live = readConfig();
+      let removed = null;
+      try {
+        if (req.method === 'DELETE') removed = removeManualGauge(live, body.id);
+        else upsertManualGauge(live, body);
+      } catch (e) {
+        return send(res, 400, 'application/json', JSON.stringify({ error: e.message }));
+      }
+      writeConfig(live);
+      cfg = live;
+      // Pure arithmetic on coordinates — no station catalogues to refetch.
+      linkManualGauges(db, cfg);
+      for (const f of cfg.fields) deriveField(db, f.id, 'manual');
+      const kept = removed ? db.prepare('SELECT COUNT(*) n FROM station_obs WHERE network=? AND station_id=?')
+        .get('MANUAL', removed.id).n : 0;
+      return json(res, { ok: true, gauges: manualGauges(cfg), keptReadings: kept });
+    }
+
+    if (p === '/api/readings') {
+      if (req.method === 'GET') {
+        const days = Math.min(Number(url.searchParams.get('days')) || 120, 5000);
+        const gauge = url.searchParams.get('gauge');
+        const rows = db.prepare(`SELECT station_id, date, precip_in, updated_at FROM station_obs
+          WHERE network='MANUAL' AND date >= ? ${gauge ? 'AND station_id = ?' : ''}
+          ORDER BY date DESC, station_id`).all(...[addDays(today(), -days), ...(gauge ? [gauge] : [])]);
+        return json(res, { readings: rows });
+      }
+      if (req.method !== 'POST') return send(res, 405, 'text/plain', 'method not allowed');
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'readings are restricted to localhost');
+      const body = await readBody(req);
+      const gauge = manualGauges(cfg).find(g => g.id === body.gauge);
+      const bad = !gauge ? `no manual gauge with id "${body.gauge}"`
+        : !isIsoDate(body.date) ? 'date must be YYYY-MM-DD'
+        : body.date > today() ? 'that date has not happened yet'
+        : null;
+      if (bad) return send(res, 400, 'application/json', JSON.stringify({ error: bad }));
+
+      // An empty value deletes the reading. "I typed that on the wrong day" and
+      // "it did not rain" have to stay distinguishable — a blank must not become
+      // a confident 0.00.
+      const blank = body.precip_in === '' || body.precip_in === null || body.precip_in === undefined;
+      const v = blank ? null : cleanPrecipIn(body.precip_in);
+      if (!blank && v === null)
+        return send(res, 400, 'application/json', JSON.stringify({ error: 'inches must be between 0 and 30' }));
+      if (blank) deleteStationObs(db, 'MANUAL', gauge.id, body.date);
+      else upsertStationObs(db, 'MANUAL', gauge.id, body.date, v);
+
+      for (const f of cfg.fields) deriveField(db, f.id, 'manual');
+      return json(res, { ok: true, gauge: gauge.id, date: body.date, precip_in: v });
+    }
+
     // --- Per-field exclusions: which sources and gauges count here ---
     if (p === '/api/config/exclusions') {
       if (req.method !== 'POST') return send(res, 405, 'text/plain', 'method not allowed');
@@ -179,12 +242,15 @@ const server = createServer(async (req, res) => {
     }
 
     if (p === '/api/fields') {
+      // Ordered by distance, not rank: rank only orders within a network, and
+      // manual gauges are linked separately from the fetched ones.
       const stations = db.prepare(`SELECT fs.field_id, fs.station_id, fs.network, fs.dist_km, fs.excluded, s.name
         FROM field_station fs LEFT JOIN station s ON s.id=fs.station_id AND s.network=fs.network
-        ORDER BY fs.field_id, fs.rank`).all();
+        ORDER BY fs.field_id, fs.dist_km`).all();
       return json(res, {
         fields: cfg.fields.map(f => ({ ...f, stations: stations.filter(s => s.field_id === f.id) })),
         sources: SOURCES,
+        gauges: manualGauges(cfg),
         farms: farmsOf(cfg.fields),
         seasonStart: seasonStart(), growingStart: growStart(),
         lastIngest: db.prepare('SELECT MAX(ts) t FROM ingest_log').get()?.t ?? null,

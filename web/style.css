@@ -14,6 +14,7 @@
   --series-mrms:   #eb6834;  /* slot 2 orange */
   --series-prism:  #1baf7a;  /* slot 3 aqua   */
   --series-rfcqpe: #eda100;  /* slot 4 yellow */
+  --series-manual: #a2489e;  /* slot 5 magenta */
   --good: #0ca30c;
   --warning: #fab219;
 }
@@ -23,7 +24,7 @@
     --surface-1: #1a1a19; --plane: #0d0d0d;
     --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10);
-    --series-gauge: #3987e5; --series-mrms: #d95926; --series-prism: #199e70; --series-rfcqpe: #c98500;
+    --series-gauge: #3987e5; --series-mrms: #d95926; --series-prism: #199e70; --series-rfcqpe: #c98500; --series-manual: #c06bbd;
   }
 }
 :root[data-theme="dark"] .viz-root {
@@ -31,7 +32,7 @@
   --surface-1: #1a1a19; --plane: #0d0d0d;
   --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10);
-  --series-gauge: #3987e5; --series-mrms: #d95926; --series-prism: #199e70; --series-rfcqpe: #c98500;
+  --series-gauge: #3987e5; --series-mrms: #d95926; --series-prism: #199e70; --series-rfcqpe: #c98500; --series-manual: #c06bbd;
 }
 
 * { box-sizing: border-box; }
@@ -122,6 +123,9 @@ table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-
 th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
 th:first-child, td:first-child { text-align: left; }
+/* The station table leads with a checkbox, so the name is the second column. */
+#stationTable th:nth-child(2), #stationTable td:nth-child(2) { text-align: left; }
+#stationTable th:first-child, #stationTable td:first-child { width: 1%; }
 td.none { color: var(--text-muted); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
 

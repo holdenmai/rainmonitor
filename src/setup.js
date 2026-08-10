@@ -156,6 +156,59 @@ export function updateField(cfg, id, patch) {
   return f;
 }
 
+/* ---------- manual gauges ---------- */
+
+/**
+ * A gauge somebody walks out and reads.
+ *
+ * These are stations like any other — they carry coordinates and rank by
+ * distance — so the whole nearest-reporting-station machinery applies without
+ * special cases. What is different is that nothing fetches them, so their
+ * readings are typed in and never overwritten by an ingest.
+ */
+export const MANUAL_DEFAULTS = { enabled: true, label: 'Manual gauges', maxStations: 2, maxDistanceKm: 25, gauges: [] };
+
+export function manualGauges(cfg) {
+  return cfg.sources?.manual?.gauges ?? [];
+}
+
+function manualSection(cfg) {
+  if (!cfg.sources) cfg.sources = {};
+  if (!cfg.sources.manual) cfg.sources.manual = { ...MANUAL_DEFAULTS };
+  if (!Array.isArray(cfg.sources.manual.gauges)) cfg.sources.manual.gauges = [];
+  return cfg.sources.manual;
+}
+
+export function upsertManualGauge(cfg, { id, name, lat, lon, maxDistanceKm }) {
+  const errors = validateField({ name, lat, lon });
+  const km = maxDistanceKm === '' || maxDistanceKm === undefined || maxDistanceKm === null
+    ? null : Number(maxDistanceKm);
+  if (km !== null && !(km > 0)) errors.push('range must be a positive number of km if given');
+  if (errors.length) throw new Error(errors.join('; '));
+
+  const sec = manualSection(cfg);
+  const g = id ? sec.gauges.find(x => x.id === id) : null;
+  if (id && !g) throw new Error(`no manual gauge with id "${id}"`);
+  const next = {
+    id: g?.id ?? slugify(name, new Set(sec.gauges.map(x => x.id))),
+    name: String(name).trim(), lat: Number(lat), lon: Number(lon),
+  };
+  // Per-gauge range, because these differ in what they are for: the stick gauge
+  // by the shop is a check on the home place, a neighbour's gauge speaks for the
+  // two fields beside it and for nothing else.
+  if (km !== null) next.maxDistanceKm = km;
+  if (g) { delete g.maxDistanceKm; Object.assign(g, next); } else sec.gauges.push(next);
+  sec.enabled = true;
+  return next;
+}
+
+export function removeManualGauge(cfg, id) {
+  const sec = manualSection(cfg);
+  const i = sec.gauges.findIndex(g => g.id === id);
+  if (i < 0) throw new Error(`no manual gauge with id "${id}"`);
+  return sec.gauges.splice(i, 1)[0];
+}
+
 /**
  * Turn a source or an individual gauge off for one field.
  *

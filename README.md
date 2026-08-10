@@ -39,6 +39,18 @@ npm run update-field -- --id north-80 --acres 78 --farm "Mai Farms"
 npm run remove-field -- --id north-80
 ```
 
+Latitude and longitude are decimal degrees. **Longitude is negative in the
+western hemisphere** — `-101.049`, not `101.049`. That is the single most common
+setup mistake, so both entry paths reject a positive longitude in US latitudes
+rather than silently returning no data forever.
+
+Your state, the gauge networks that cover it, and whether a state mesonet applies
+are all detected from your coordinates and written back into `config.json`. To
+pin them yourself, edit `region.states` and set `region.autoDetected` to `false`.
+
+A field is a single point, not a polygon. For a quarter section that is well
+inside the grid resolution, so it makes no practical difference.
+
 ### Farms
 
 Every field can carry an optional **farm** — free-form text, so it can be an
@@ -52,17 +64,30 @@ Farm names are matched case-insensitively against the ones already in use, so
 `mai farms` typed into a second field joins `Mai Farms` rather than starting a
 near-duplicate.
 
-Latitude and longitude are decimal degrees. **Longitude is negative in the
-western hemisphere** — `-101.049`, not `101.049`. That is the single most common
-setup mistake, so both entry paths reject a positive longitude in US latitudes
-rather than silently returning no data forever.
+## Gauges you read yourself
 
-Your state, the gauge networks that cover it, and whether a state mesonet applies
-are all detected from your coordinates and written back into `config.json`. To
-pin them yourself, edit `region.states` and set `region.autoDetected` to `false`.
+A stick gauge by the weather station, a neighbour's gauge next to two of your
+fields — gauges that report to nothing online. Add them in the dashboard's
+**Manual gauges** panel with their coordinates, then type readings in as you
+collect them.
 
-A field is a single point, not a polygon. For a quarter section that is well
-inside the grid resolution, so it makes no practical difference.
+They behave like any other station: they rank by distance and cover any field
+within range. Two things are different.
+
+- **Nothing fetches them**, so an ingest never overwrites a reading you typed.
+- **They are charted as their own series**, in magenta, rather than being merged
+  into the automatic gauge number. That is the point of a gauge you read as a
+  double check — averaging it into the same line would hide exactly the
+  disagreement you put it there to see.
+
+Each gauge can carry its own **range** in km. The default (`maxDistanceKm` under
+`sources.manual`) is 25 km, which is right for a gauge that speaks for the home
+place; set a tighter one on a neighbour's gauge so it covers the two fields
+beside it and nothing else.
+
+Leaving the amount blank deletes a reading rather than storing `0.00` — "I
+haven't read it" and "it stayed dry" have to stay different answers. Removing a
+gauge keeps its readings, so adding it back restores them.
 
 ## Choosing what counts for a field
 
@@ -97,6 +122,7 @@ It is stored per field in `config.json`:
 | **MRMS** | Multi-Radar Multi-Sensor, gauge-corrected, via IEM | ~12 km | yes |
 | **PRISM** | Climate analysis blending gauges + terrain | 4 km | yes |
 | **Rain gauge** | Nearest *reporting* NWS COOP/ASOS or state mesonet station | a point | yes |
+| **Manual gauge** | A gauge you read by hand and type in yourself | a point | you type it |
 
 Each source is stored separately on purpose. **The disagreement between them is
 itself the signal** — when the radar says 0.6" and the gauge says 0.00", either
