@@ -202,6 +202,24 @@ export function upsertManualGauge(cfg, { id, name, lat, lon, maxDistanceKm }) {
   return next;
 }
 
+/**
+ * Adopt a gauge from another instance's export, keeping its id verbatim.
+ *
+ * The id is what the readings are filed under, so re-slugifying the name here
+ * would silently attach a year of hand-read data to the wrong gauge — or to a
+ * gauge that does not exist. An id we already use wins: that is our gauge.
+ */
+export function adoptManualGauge(cfg, g) {
+  if (!g?.id || !g.name || !Number.isFinite(Number(g.lat)) || !Number.isFinite(Number(g.lon))) return null;
+  const sec = manualSection(cfg);
+  if (sec.gauges.some(x => x.id === g.id)) return null;
+  const next = { id: String(g.id), name: String(g.name).trim(), lat: Number(g.lat), lon: Number(g.lon) };
+  if (Number(g.maxDistanceKm) > 0) next.maxDistanceKm = Number(g.maxDistanceKm);
+  sec.gauges.push(next);
+  sec.enabled = true;
+  return next;
+}
+
 export function removeManualGauge(cfg, id) {
   const sec = manualSection(cfg);
   const i = sec.gauges.findIndex(g => g.id === id);

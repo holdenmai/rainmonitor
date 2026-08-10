@@ -107,6 +107,44 @@
   <section class="card">
     <div class="card-head">
       <div>
+        <h2>Export &amp; import</h2>
+        <p class="note">Move a date range between machines. Run this on more than one computer and their gaps will not line up — RFC QPE publishes no archive, so a day missed while a machine was off is gone on that machine but not on the one that was awake. Importing never overwrites newer data, and re-importing the same file changes nothing.</p>
+      </div>
+    </div>
+
+    <form id="exportForm" class="fieldform">
+      <label><span>From</span><input name="from" type="date" required></label>
+      <label><span>To</span><input name="to" type="date" required></label>
+      <label><span>Fields</span>
+        <select name="scope" id="exportScope">
+          <option value="all">All fields</option>
+          <option value="farm">Fields in the selected farms</option>
+          <option value="one">Only the selected field</option>
+        </select>
+      </label>
+      <div class="ctl">
+        <span>Sources</span>
+        <details class="multi" id="exportSources">
+          <summary id="exportSourcesLabel">All sources</summary>
+          <div class="multi-panel" id="exportSourceOptions"></div>
+        </details>
+      </div>
+      <button class="btn" type="submit">Download sync file</button>
+      <button class="btn" type="button" id="exportCsvBtn">Download CSV</button>
+    </form>
+    <p class="note" id="exportMsg" style="margin:8px 0 6px"></p>
+
+    <form id="importForm" class="fieldform">
+      <label><span>Import a sync file</span><input name="file" type="file" accept=".json,application/json" required></label>
+      <label class="check"><input name="createMissingFields" type="checkbox"><span>Create fields this instance does not have</span></label>
+      <button class="btn" type="submit">Merge into this instance</button>
+    </form>
+    <p class="note" id="importMsg" style="margin:8px 0 6px"></p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
         <h2>Manual gauges</h2>
         <p class="note">Gauges you read yourself — the stick by the weather station, a neighbour's gauge near a field. Nothing fetches these, so they are never overwritten by an ingest. They rank by distance like any other gauge and are charted as their own series, so they stay an independent check rather than getting averaged into the automatic number.</p>
       </div>

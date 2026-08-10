@@ -16,6 +16,8 @@
     "add-field": "node src/cli.js add-field",
     "update-field": "node src/cli.js update-field",
     "remove-field": "node src/cli.js remove-field",
+    "export": "node src/cli.js export",
+    "import": "node src/cli.js import",
     "check": "node scripts/check-alignment.mjs",
     "calibrate": "node scripts/calibrate.mjs"
   }

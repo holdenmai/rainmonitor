@@ -415,6 +415,100 @@ async function load() {
   $('footer').textContent = `Sources: MRMS radar QPE and PRISM via IEM reanalysis; gauges via NWS COOP/ASOS and Kansas Mesonet. Last ingest ${META.lastIngest ?? 'never'} UTC.`;
 }
 
+/* ---------- export / import ---------- */
+const exportMsg = (t, bad) => note('exportMsg', t, bad);
+const importMsg = (t, bad) => note('importMsg', t, bad);
+
+// Empty means every source, matching the farm filter's convention.
+let exportSrc = new Set();
+
+function renderExportSources() {
+  const opts = ALL_SERIES.concat([{ key: 'iemre', label: 'IEM reanalysis' }]);
+  $('exportSourceOptions').innerHTML =
+    `<label><input type="checkbox" data-esrc="*" ${exportSrc.size ? '' : 'checked'}>All sources</label><div class="sep"></div>`
+    + opts.map(o => `<label><input type="checkbox" data-esrc="${o.key}"${exportSrc.has(o.key) ? ' checked' : ''}>${esc(o.label)}</label>`).join('');
+  $('exportSourcesLabel').textContent = !exportSrc.size ? 'All sources'
+    : exportSrc.size === 1 ? (opts.find(o => o.key === [...exportSrc][0])?.label ?? [...exportSrc][0])
+    : `${exportSrc.size} sources`;
+
+  $('exportSourceOptions').querySelectorAll('input').forEach(box => box.addEventListener('change', () => {
+    if (box.dataset.esrc === '*') exportSrc.clear();
+    else if (box.checked) exportSrc.add(box.dataset.esrc); else exportSrc.delete(box.dataset.esrc);
+    renderExportSources();
+  }));
+}
+
+function exportQuery() {
+  const fd = new FormData($('exportForm'));
+  const scope = fd.get('scope');
+  const ids = scope === 'one' ? [$('fieldSel').value]
+    : scope === 'farm' ? visibleFields().map(f => f.id)
+    : [];
+  const q = new URLSearchParams({ from: fd.get('from'), to: fd.get('to') });
+  if (ids.length) q.set('fields', ids.join(','));
+  if (exportSrc.size) q.set('sources', [...exportSrc].join(','));
+  return q;
+}
+
+function wireExport() {
+  const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const now = new Date(), back = new Date(now); back.setDate(back.getDate() - 14);
+  $('exportForm').to.value = iso(now);
+  $('exportForm').from.value = iso(back);
+  renderExportSources();
+
+  const download = path => {
+    const q = exportQuery();
+    if (q.get('from') > q.get('to')) return exportMsg('The "from" date is after the "to" date.', true);
+    // A plain navigation, so the browser handles the file dialog and the whole
+    // range never has to sit in a JS string first.
+    location.href = `${path}?${q}`;
+    exportMsg(`Downloading ${q.get('from')} to ${q.get('to')}.`);
+  };
+  $('exportForm').addEventListener('submit', e => { e.preventDefault(); download('/api/export.json'); });
+  $('exportCsvBtn').addEventListener('click', () => download('/api/export.csv'));
+
+  $('importForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const file = $('importForm').file.files[0];
+    if (!file) return importMsg('Choose a sync file first.', true);
+    importMsg(`Reading ${file.name}…`);
+    let bundle;
+    try { bundle = JSON.parse(await file.text()); }
+    catch { return importMsg(`${file.name} is not valid JSON.`, true); }
+
+    const res = await fetch('/api/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bundle, createMissingFields: $('importForm').createMissingFields.checked }),
+    });
+    const r = await res.json().catch(() => ({}));
+    if (!res.ok) return importMsg(r.error || `Import failed (${res.status})`, true);
+
+    const bits = [
+      `${r.obs} new observation${r.obs === 1 ? '' : 's'}`,
+      r.obsUpdated ? `${r.obsUpdated} revised` : null,
+      r.readings ? `${r.readings} new station reading${r.readings === 1 ? '' : 's'}` : null,
+      r.readingsUpdated ? `${r.readingsUpdated} station reading${r.readingsUpdated === 1 ? '' : 's'} revised` : null,
+      r.gauges ? `${r.gauges} manual gauge${r.gauges === 1 ? '' : 's'}` : null,
+      r.addedFields?.length ? `${r.addedFields.length} field${r.addedFields.length === 1 ? '' : 's'} created` : null,
+      r.skipped ? `${r.skipped} already current or invalid` : null,
+    ].filter(Boolean);
+    const warn = r.unknownFields?.length
+      ? ` Skipped data for ${r.unknownFields.length} field(s) this instance does not have (${r.unknownFields.join(', ')}) — tick the box above to create them.`
+      : '';
+    const disc = r.unmapped?.length
+      ? ` ${r.unmapped.length} field(s) have no gauges mapped yet (${r.unmapped.join(', ')}), so imported station readings are stored but not yet charted — run "npm run discover".`
+      : '';
+    importMsg(`Merged: ${bits.join(', ')}.${warn}${disc}`, !!(warn || disc));
+
+    META = await fetch('/api/fields').then(r => r.json());
+    renderFarmFilter();
+    refreshFieldSelect();
+    await renderGauges();
+    await load();
+  });
+}
+
 /* ---------- manual gauges ---------- */
 const gaugeMsg = (t, bad) => note('gaugeMsg', t, bad);
 
@@ -670,6 +764,7 @@ function renderFields() {
     }
   });
   $('readingGauge').addEventListener('change', renderReadings);
+  wireExport();
   const now = new Date();
   $('addReading').date.value =
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;

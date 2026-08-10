@@ -148,6 +148,10 @@ td.none { color: var(--text-muted); }
   border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
 }
 .fieldform input:focus { outline: 2px solid var(--series-gauge); outline-offset: -1px; }
+.fieldform input[type="file"] { width: 260px; padding: 5px 6px; }
+.fieldform label.check { flex-direction: row; align-items: center; gap: 7px; padding-bottom: 6px; }
+.fieldform label.check input { width: auto; }
+.fieldform label.check span { color: var(--text-primary); font-size: 12.5px; }
 .toggles { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 2px 0 12px; }
 .toggles label {
   display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;

@@ -11,6 +11,7 @@ import {
 } from './setup.js';
 import { discoverStations, linkManualGauges } from './stations.js';
 import { deriveField } from './derive.js';
+import { buildExport, applyImport, rederiveAfterImport } from './sync.js';
 
 let cfg = loadConfig();
 const db = openDb();
@@ -86,13 +87,33 @@ function summary(fieldId) {
   return out;
 }
 
-function csv(fieldId, since) {
-  const fields = fieldId ? [fieldId] : cfg.fields.map(f => f.id);
+/**
+ * Shared query parsing for both exports: an explicit from/to window, an
+ * optional field list, an optional source list. `days` is still honoured so
+ * older bookmarked export links keep working.
+ */
+function exportRange(url) {
+  const q = url.searchParams;
+  const list = k => (q.get(k) ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  const to = isIsoDate(q.get('to')) ? q.get('to') : today();
+  const days = Math.min(Number(q.get('days')) || 400, 5000);
+  const from = isIsoDate(q.get('from')) ? q.get('from') : addDays(to, -days);
+  const asked = [...list('fields'), ...(q.get('field') ? [q.get('field')] : [])];
+  const fields = asked.filter(id => cfg.fields.some(f => f.id === id));
+  const sources = list('sources').filter(s => SOURCES.includes(s));
+  return {
+    from: from <= to ? from : to, to,
+    fields: fields.length ? fields : cfg.fields.map(f => f.id),
+    sources: sources.length ? sources : SOURCES,
+  };
+}
+
+function csv(fields, from, to) {
   const names = Object.fromEntries(cfg.fields.map(f => [f.id, f.name]));
   const farms = Object.fromEntries(cfg.fields.map(f => [f.id, f.farm ?? '']));
   const lines = ['field_id,field_name,farm,date,gauge_in,manual_in,rfcqpe_4km_in,mrms_in,prism_in,iemre_in,gauge_station,manual_gauge'];
   for (const id of fields) {
-    for (const r of series(id, since)) {
+    for (const r of series(id, from).filter(r => r.date <= to)) {
       const q = v => (v === null || v === undefined ? '' : v);
       lines.push([id, csvq(names[id]), csvq(farms[id]), r.date,
         q(r.gauge), q(r.manual), q(r.rfcqpe), q(r.mrms), q(r.prism), q(r.iemre),
@@ -109,11 +130,18 @@ const send = (res, code, type, body) => {
 };
 const json = (res, obj) => send(res, 200, 'application/json', JSON.stringify(obj));
 
-const readBody = req => new Promise((resolve, reject) => {
-  let b = '';
-  req.on('data', c => { b += c; if (b.length > 1e6) req.destroy(); });
-  req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch (e) { reject(new Error('invalid JSON body')); } });
-  req.on('error', reject);
+// An import bundle is a whole date range of observations, so it needs far more
+// headroom than a field edit. Overflow rejects with a message rather than
+// destroying the socket, which used to leave the request hanging with no reply.
+const readBody = (req, max = 1e6) => new Promise((resolve, reject) => {
+  let b = '', over = false;
+  req.on('data', c => {
+    if (over) return;
+    b += c;
+    if (b.length > max) { over = true; reject(new Error(`body larger than ${Math.round(max / 1e6)} MB`)); req.destroy(); }
+  });
+  req.on('end', () => { if (over) return; try { resolve(b ? JSON.parse(b) : {}); } catch { reject(new Error('invalid JSON body')); } });
+  req.on('error', e => { if (!over) reject(e); });
 });
 
 /**
@@ -263,12 +291,60 @@ const server = createServer(async (req, res) => {
     if (p === '/api/summary') return json(res, { summaries: cfg.fields.map(f => summary(f.id)) });
     if (p === '/api/calibration') return json(res, calibration(db, cfg) ?? {});
     if (p === '/api/export.csv') {
-      const days = Math.min(Number(url.searchParams.get('days')) || 400, 5000);
+      const { from, to, fields } = exportRange(url);
       res.writeHead(200, {
         'Content-Type': 'text/csv',
-        'Content-Disposition': `attachment; filename="rainfall_${today()}.csv"`,
+        'Content-Disposition': `attachment; filename="rainfall_${from}_to_${to}.csv"`,
       });
-      return res.end(csv(url.searchParams.get('field') || null, addDays(today(), -days)));
+      return res.end(csv(fields, from, to));
+    }
+
+    // --- Sync between instances ---
+    if (p === '/api/export.json') {
+      const { from, to, fields, sources } = exportRange(url);
+      const bundle = buildExport(db, cfg, { from, to, fields, sources });
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Disposition': `attachment; filename="rainmonitor_${from}_to_${to}.json"`,
+      });
+      return res.end(JSON.stringify(bundle, null, 1));
+    }
+
+    if (p === '/api/import') {
+      if (req.method !== 'POST') return send(res, 405, 'text/plain', 'method not allowed');
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'importing is restricted to localhost');
+      const body = await readBody(req, 64e6);
+      const live = readConfig();
+      let result;
+      try {
+        // One transaction: a half-applied merge is worse than a rejected one,
+        // because nothing on screen would say which half landed.
+        db.exec('BEGIN');
+        try {
+          result = applyImport(db, live, body.bundle ?? body, {
+            createMissingFields: !!body.createMissingFields,
+            importGauges: body.importGauges !== false,
+          });
+          db.exec('COMMIT');
+        } catch (e) { db.exec('ROLLBACK'); throw e; }
+      } catch (e) {
+        return send(res, 400, 'application/json', JSON.stringify({ error: e.message }));
+      }
+      writeConfig(live);
+      cfg = live;
+      syncFields(db, cfg.fields);
+      linkManualGauges(db, cfg);
+      // Imported station readings change which gauge is nearest-reporting on a
+      // given day, so the per-field figures are recomputed rather than trusted
+      // from the sending machine, whose exclusions are not ours.
+      const derived = rederiveAfterImport(db, cfg);
+      // Station readings only become a field's gauge figure once that field has
+      // gauges mapped to it. On an instance that has never run discover they
+      // arrive and sit there, which looks like the import silently did nothing.
+      const unmapped = cfg.fields
+        .filter(f => !db.prepare('SELECT 1 FROM field_station WHERE field_id = ? LIMIT 1').get(f.id))
+        .map(f => f.name);
+      return json(res, { ok: true, ...result, derived, unmapped, needsDiscover: unmapped.length > 0 });
     }
 
     // Static files, path-traversal guarded.

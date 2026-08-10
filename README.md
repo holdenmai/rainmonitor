@@ -113,6 +113,43 @@ It is stored per field in `config.json`:
   "exclude": { "sources": ["prism"], "stations": ["ONFARM|MAIFARMS"] } }
 ```
 
+## Running it on more than one computer
+
+RFC QPE publishes rolling windows and no archive, so a day missed while a
+machine was off is gone on that machine — permanently. The same is true of an
+on-farm WeatherLink station, whose `NOAAMO.txt` is overwritten at month roll.
+
+Run a copy on two or three computers and their gaps do not line up. The
+**Export & import** panel moves a date range from one to the others:
+
+```bash
+npm run export -- --days 14 --out //shared/rain/laptop.json
+npm run import -- --file //shared/rain/laptop.json
+```
+
+Both are also in the dashboard, with pickers for the range, the fields and the
+sources.
+
+What travels is the **raw record**, never the derived one. Gridded observations
+and individual station readings go in the file; each machine recomputes its own
+per-field gauge figures on arrival, because the receiving machine may rank
+gauges differently or exclude one, and its answer to "which gauge counts for
+this field" has to win over the sender's.
+
+The merge is never destructive:
+
+- A row is written only if it is missing here, or if its `updated_at` is newer
+  than ours. Two machines that both revised the same day keep the later revision.
+- Re-importing the same file changes nothing, so a scheduled job can run blind.
+- Data for a field this machine does not have is skipped and reported by name.
+  Tick **Create fields this instance does not have** (or pass `--create-fields`)
+  to adopt them, then run `npm run discover` to map their gauges.
+- The whole merge is one transaction. A rejected import leaves nothing behind.
+
+For a new machine, run `npm run discover` before importing. Station readings can
+only become a field's gauge figure once that field has gauges mapped; the import
+says so by name when some field does not.
+
 ## Where the numbers come from
 
 | Source | What it is | Resolution | Backfills? |
@@ -274,10 +311,12 @@ row per field/date/source, so adding a `mrms1km` source is purely additive.
 ```
 config.example.json           template; npm run init copies it to config.json
 config.json                   YOUR setup — gitignored, never committed
-src/cli.js                    init | discover | ingest | backfill | field commands
-src/setup.js                  config read/write, field validation
+src/cli.js                    init | discover | ingest | backfill | export | import
+src/setup.js                  config read/write, field + gauge validation
 src/region.js                 lat/lon -> state -> gauge networks
-src/ingest.js                 pull + per-field derivation
+src/ingest.js                 pull the sources
+src/derive.js                 station readings -> each field's gauge figure
+src/sync.js                   export/import a date range between machines
 src/sources/                  iemre, rfcqpe, iemgauge, ksmesonet, weatherlink
 src/calibration.js            gauge-vs-grid bias (shared by CLI and dashboard)
 src/db.js                     SQLite schema
