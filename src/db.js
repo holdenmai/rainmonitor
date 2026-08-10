@@ -26,9 +26,12 @@ function migrate(db) {
     );
 
     -- Which stations we pull for which field, and how far away they are.
+    -- excluded = linked and in range, but deliberately not counted for this
+    -- field. Kept as a link rather than dropped so it stays listed in the UI
+    -- with its box unticked, instead of vanishing with no way back.
     CREATE TABLE IF NOT EXISTS field_station (
       field_id TEXT NOT NULL, network TEXT NOT NULL, station_id TEXT NOT NULL,
-      dist_km REAL NOT NULL, rank INTEGER NOT NULL,
+      dist_km REAL NOT NULL, rank INTEGER NOT NULL, excluded INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (field_id, network, station_id)
     );
 
@@ -80,6 +83,7 @@ function migrate(db) {
   // there is no separate migration step to run — the dashboard and the daily
   // task both open the db through here, so whichever runs first upgrades it.
   addColumn(db, 'field', 'farm', 'TEXT');
+  addColumn(db, 'field_station', 'excluded', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 function addColumn(db, table, col, decl) {
@@ -117,8 +121,16 @@ export function upsertStation(db, s) {
 
 export function setFieldStations(db, fieldId, links) {
   db.prepare('DELETE FROM field_station WHERE field_id = ?').run(fieldId);
-  const ins = db.prepare('INSERT INTO field_station (field_id,network,station_id,dist_km,rank) VALUES (?,?,?,?,?)');
-  links.forEach((l, i) => ins.run(fieldId, l.network, l.station_id, l.dist_km, i + 1));
+  const ins = db.prepare('INSERT INTO field_station (field_id,network,station_id,dist_km,rank,excluded) VALUES (?,?,?,?,?,?)');
+  links.forEach((l, i) => ins.run(fieldId, l.network, l.station_id, l.dist_km, i + 1, l.excluded ? 1 : 0));
+}
+
+/** Apply a field's station exclusions to links already in the table. */
+export function setStationExclusions(db, fieldId, excludedKeys) {
+  const ex = new Set(excludedKeys ?? []);
+  const rows = db.prepare('SELECT network, station_id FROM field_station WHERE field_id = ?').all(fieldId);
+  const up = db.prepare('UPDATE field_station SET excluded = ? WHERE field_id = ? AND network = ? AND station_id = ?');
+  for (const r of rows) up.run(ex.has(`${r.network}|${r.station_id}`) ? 1 : 0, fieldId, r.network, r.station_id);
 }
 
 export function upsertObs(db, fieldId, date, source, precipIn, detail = null) {

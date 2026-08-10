@@ -1,17 +1,20 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, extname, normalize } from 'node:path';
-import { openDb, syncFields } from './db.js';
-import { loadConfig, ROOT, today, addDays } from './util.js';
+import { openDb, syncFields, setStationExclusions } from './db.js';
+import { loadConfig, ROOT, today, addDays, SOURCES } from './util.js';
 import { calibration } from './calibration.js';
-import { readConfig, writeConfig, autoDetectRegion, addField, updateField, removeField, farmsOf } from './setup.js';
+import {
+  readConfig, writeConfig, autoDetectRegion,
+  addField, updateField, removeField, setExclusions, farmsOf,
+} from './setup.js';
 import { discoverStations } from './stations.js';
+import { deriveField } from './derive.js';
 
 let cfg = loadConfig();
 const db = openDb();
 const WEB = join(ROOT, 'web');
 
-const SOURCES = ['gauge', 'rfcqpe', 'mrms', 'prism', 'iemre'];
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 
 const seasonStart = () => {
@@ -22,9 +25,18 @@ const seasonStart = () => {
 };
 const growStart = () => `${new Date().getFullYear()}-${cfg.season?.growingSeasonStart ?? '04-01'}`;
 
-/** Wide rows: one per field-date, one column per source. */
+const excludedSources = fieldId =>
+  new Set(cfg.fields.find(f => f.id === fieldId)?.exclude?.sources ?? []);
+
+/**
+ * Wide rows: one per field-date, one column per source.
+ *
+ * Excluded sources are blanked here rather than filtered in SQL, so every
+ * downstream view — KPI tiles, charts, table, CSV — honours the exclusion from
+ * one place, and the underlying rows stay intact for when it is turned back on.
+ */
 function series(fieldId, since) {
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT date,
       MAX(CASE WHEN source='gauge'  THEN precip_in END) gauge,
       MAX(CASE WHEN source='rfcqpe' THEN precip_in END) rfcqpe,
@@ -34,6 +46,13 @@ function series(fieldId, since) {
       MAX(CASE WHEN source='gauge'  THEN detail    END) gauge_src
     FROM obs WHERE field_id = ? AND date >= ?
     GROUP BY date ORDER BY date`).all(fieldId, since);
+
+  const ex = excludedSources(fieldId);
+  if (ex.size) for (const r of rows) {
+    for (const s of ex) r[s] = null;
+    if (ex.has('gauge')) r.gauge_src = null;
+  }
+  return rows;
 }
 
 const sum = (rows, k) => {
@@ -136,12 +155,36 @@ const server = createServer(async (req, res) => {
       return send(res, 405, 'text/plain', 'method not allowed');
     }
 
+    // --- Per-field exclusions: which sources and gauges count here ---
+    if (p === '/api/config/exclusions') {
+      if (req.method !== 'POST') return send(res, 405, 'text/plain', 'method not allowed');
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'editing is restricted to localhost');
+      const body = await readBody(req);
+      const live = readConfig();
+      try {
+        setExclusions(live, body.id, body);
+      } catch (e) {
+        return send(res, 400, 'application/json', JSON.stringify({ error: e.message }));
+      }
+      writeConfig(live);
+      cfg = live;
+      // Flip the flags in place and re-derive now, so the change is visible on
+      // this reload. Promoting the next station in range needs the full station
+      // lists, which is a `npm run discover` away.
+      const f = cfg.fields.find(x => x.id === body.id);
+      setStationExclusions(db, body.id, f.exclude?.stations ?? []);
+      deriveField(db, body.id, 'gauge');
+      deriveField(db, body.id, 'manual');
+      return json(res, { ok: true, exclude: f.exclude ?? {} });
+    }
+
     if (p === '/api/fields') {
-      const stations = db.prepare(`SELECT fs.field_id, fs.station_id, fs.network, fs.dist_km, s.name
+      const stations = db.prepare(`SELECT fs.field_id, fs.station_id, fs.network, fs.dist_km, fs.excluded, s.name
         FROM field_station fs LEFT JOIN station s ON s.id=fs.station_id AND s.network=fs.network
         ORDER BY fs.field_id, fs.rank`).all();
       return json(res, {
-        fields: cfg.fields.map(f => ({ ...f, stations: stations.filter(s => s.field_id === f.id).slice(0, 4) })),
+        fields: cfg.fields.map(f => ({ ...f, stations: stations.filter(s => s.field_id === f.id) })),
+        sources: SOURCES,
         farms: farmsOf(cfg.fields),
         seasonStart: seasonStart(), growingStart: growStart(),
         lastIngest: db.prepare('SELECT MAX(ts) t FROM ingest_log').get()?.t ?? null,

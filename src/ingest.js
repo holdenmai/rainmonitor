@@ -5,6 +5,7 @@ import { fetchKsStationRange } from './sources/ksmesonet.js';
 import { fetchOnFarmDaily, fetchOnFarmMonthly } from './sources/weatherlink.js';
 import { identifyPoint, LAYERS } from './sources/rfcqpe.js';
 import { upsertObs, upsertStationObs, upsertStationMonthly, upsertFieldWindow, logIngest, syncFields } from './db.js';
+import { deriveAll } from './derive.js';
 
 const years = (s, e) => {
   const out = [];
@@ -72,7 +73,11 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
   }
 
   // --- Gauges: fetch each station once, then map to every field that uses it ---
-  const links = db.prepare('SELECT field_id, network, station_id, dist_km FROM field_station ORDER BY field_id, rank').all();
+  // Excluded stations are still fetched. They are only a handful of requests,
+  // and it means turning one back on for a field restores its whole history
+  // instead of leaving a hole from the day it was switched off.
+  const links = db.prepare(`SELECT field_id, network, station_id, dist_km FROM field_station
+    WHERE network <> 'MANUAL' ORDER BY field_id, rank`).all();
   const wanted = new Map();
   for (const l of links) wanted.set(`${l.network}|${l.station_id}`, l);
 
@@ -92,7 +97,7 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
     }
   }
 
-  const cache = new Map();
+  let pulled = 0;
   for (const [key, l] of wanted) {
     try {
       let rows;
@@ -108,39 +113,20 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
         rows = rows.filter(r => r.date >= sdate && r.date <= edate);
       }
       for (const r of rows) if (r.precip_in !== null) upsertStationObs(db, l.network, l.station_id, r.date, r.precip_in);
-      cache.set(key, rows.filter(r => r.precip_in !== null));
+      pulled++;
       logIngest(db, `gauge:${key}`, true, rows.length, null);
     } catch (e) {
-      cache.set(key, []);
       logIngest(db, `gauge:${key}`, false, 0, e.message);
       log(`  [gauge] ${key}: FAILED ${e.message}`);
     }
   }
-  log(`  [gauge] pulled ${cache.size} stations`);
+  log(`  [gauge] pulled ${pulled}/${wanted.size} stations`);
 
-  // Derive a per-field gauge value: nearest station that actually reported that
-  // day. Recorded with its name and distance so a suspicious number is traceable
-  // to a specific gauge rather than an anonymous average.
-  const byField = new Map();
-  for (const l of links) {
-    if (!byField.has(l.field_id)) byField.set(l.field_id, []);
-    byField.get(l.field_id).push(l);
-  }
-  for (const [fieldId, list] of byField) {
-    const perDate = new Map();
-    for (const l of list) {
-      for (const r of cache.get(`${l.network}|${l.station_id}`) || []) {
-        const cur = perDate.get(r.date);
-        if (!cur || l.dist_km < cur.dist_km) {
-          perDate.set(r.date, { ...r, dist_km: l.dist_km, station_id: l.station_id, network: l.network });
-        }
-      }
-    }
-    for (const [date, v] of perDate) {
-      upsertObs(db, fieldId, date, 'gauge', v.precip_in,
-        `${v.station_id} (${v.network}) ${v.dist_km.toFixed(1)} km`);
-    }
-  }
+  // Derive each field's gauge value from everything stored, not just from what
+  // this run fetched — so a station that went quiet keeps the history it already
+  // reported, and an excluded gauge drops out of the past as well as the future.
+  const counts = deriveAll(db, cfg.fields);
+  log(`  [derive] ${counts.gauge} gauge days, ${counts.manual} manual days`);
 
   log('Done.');
 }

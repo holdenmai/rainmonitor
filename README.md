@@ -64,6 +64,30 @@ pin them yourself, edit `region.states` and set `region.autoDetected` to `false`
 A field is a single point, not a polygon. For a quarter section that is well
 inside the grid resolution, so it makes no practical difference.
 
+## Choosing what counts for a field
+
+Not every source describes every field. An on-farm gauge is ground truth on the
+home quarter and a guess twenty miles out, and a COOP volunteer who reads at 7am
+may be the only gauge for one field and irrelevant to another.
+
+The **What counts for this field** panel has a checkbox per source and per
+mapped gauge. Untick one and it stops counting for that field — **in the past as
+well as going forward**, because the field's daily gauge figure is *derived* from
+the stored station readings rather than frozen at fetch time. Nothing is
+deleted: tick it back on and the full history reappears.
+
+Excluding a gauge promotes the next station in range for that field, so turning
+off a distant gauge falls back to a better one rather than going blind. The
+promotion needs the full station lists, so run `npm run discover` after — the
+dashboard says so when it applies.
+
+It is stored per field in `config.json`:
+
+```json
+{ "id": "river", "name": "River", "lat": 38.94, "lon": -101.80,
+  "exclude": { "sources": ["prism"], "stations": ["ONFARM|MAIFARMS"] } }
+```
+
 ## Where the numbers come from
 
 | Source | What it is | Resolution | Backfills? |

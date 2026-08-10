@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT } from './util.js';
+import { ROOT, SOURCES } from './util.js';
 import { detectStates, networksFor, mesonetFor, STATE_MESONETS } from './region.js';
 
 export const CONFIG_PATH = join(ROOT, 'config.json');
@@ -153,6 +153,30 @@ export function updateField(cfg, id, patch) {
   const others = { ...cfg, fields: cfg.fields.filter(x => x.id !== id) };
   const fm = normalizeFarm(others, merged.farm);
   if (fm) f.farm = fm; else delete f.farm;
+  return f;
+}
+
+/**
+ * Turn a source or an individual gauge off for one field.
+ *
+ * Exclusions live on the field rather than on the source because they are a
+ * statement about this field: an on-farm gauge that is ground truth for the
+ * home quarter is a guess 20 miles out, and the fields it does not describe
+ * should not average it in. Nothing is deleted — the readings stay in the
+ * database, so the decision is reversible.
+ */
+export function setExclusions(cfg, id, { sources, stations }) {
+  const f = cfg.fields.find(x => x.id === id);
+  if (!f) throw new Error(`no field with id "${id}"`);
+  const clean = (list, valid) => [...new Set((list ?? []).map(s => String(s).trim()).filter(Boolean))]
+    .filter(s => !valid || valid.includes(s)).sort();
+
+  const ex = { ...(f.exclude ?? {}) };
+  if (sources !== undefined) ex.sources = clean(sources, SOURCES);
+  if (stations !== undefined) ex.stations = clean(stations);
+  for (const k of ['sources', 'stations']) if (!ex[k]?.length) delete ex[k];
+
+  if (Object.keys(ex).length) f.exclude = ex; else delete f.exclude;
   return f;
 }
 

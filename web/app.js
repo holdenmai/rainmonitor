@@ -388,11 +388,7 @@ async function load() {
       has(r[s.key]) ? `<td>${r[s.key].toFixed(2)}</td>` : '<td class="none">—</td>').join('')}
      <td class="none">${r.gauge_src ?? '—'}</td></tr>`).join('');
 
-  $('stationTable').querySelector('thead').innerHTML = '<tr><th>Station</th><th>Network</th><th>Distance</th></tr>';
-  $('stationTable').querySelector('tbody').innerHTML = (field?.stations ?? []).map(s =>
-    `<tr><td>${s.name ?? s.station_id} <span class="none">(${s.station_id})</span></td>
-     <td class="none">${s.network}</td><td>${s.dist_km.toFixed(1)} km</td></tr>`).join('');
-
+  renderExclusions(field);
   renderFields();
 
   $('csvBtn').href = `/api/export.csv?field=${fieldId}&days=${Math.max(days, 400)}`;
@@ -404,12 +400,71 @@ async function load() {
   $('footer').textContent = `Sources: MRMS radar QPE and PRISM via IEM reanalysis; gauges via NWS COOP/ASOS and Kansas Mesonet. Last ingest ${META.lastIngest ?? 'never'} UTC.`;
 }
 
-/* ---------- field management ---------- */
-const msg = (t, bad) => {
-  const n = $('fieldMsg');
+/* ---------- per-field exclusions ---------- */
+const note = (id, t, bad) => {
+  const n = $(id);
   n.textContent = t || '';
   n.style.color = bad ? 'var(--warning)' : 'var(--text-muted)';
 };
+const msg = (t, bad) => note('fieldMsg', t, bad);
+const exMsg = (t, bad) => note('exMsg', t, bad);
+
+const stationKey = s => `${s.network}|${s.station_id}`;
+
+async function saveExclusions(fieldId, patch) {
+  exMsg('Saving…');
+  const res = await fetch('/api/config/exclusions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: fieldId, ...patch }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { exMsg(body.error || `Failed (${res.status})`, true); return false; }
+  META = await fetch('/api/fields').then(r => r.json());
+  await load();
+  return true;
+}
+
+function renderExclusions(field) {
+  if (!field) return;
+  const exSrc = new Set(field.exclude?.sources ?? []);
+  const exSta = new Set(field.exclude?.stations ?? []);
+  $('exField').textContent = field.name;
+
+  $('sourceToggles').innerHTML = SERIES.map(s => {
+    const on = !exSrc.has(s.key);
+    return `<label class="${on ? '' : 'off'}"><input type="checkbox" data-src="${s.key}"${on ? ' checked' : ''}>
+      <span class="swatch" style="background:${s.color}"></span>${s.label}</label>`;
+  }).join('');
+  $('sourceToggles').querySelectorAll('[data-src]').forEach(box => box.addEventListener('change', () => {
+    const next = new Set(exSrc);
+    if (box.checked) next.delete(box.dataset.src); else next.add(box.dataset.src);
+    saveExclusions(field.id, { sources: [...next] })
+      .then(ok => { if (ok) exMsg(`${box.checked ? 'Counting' : 'Ignoring'} ${box.dataset.src} for ${field.name}.`); });
+  }));
+
+  const st = $('stationTable');
+  st.querySelector('thead').innerHTML =
+    '<tr><th>Counts</th><th>Station</th><th>Network</th><th>Distance</th></tr>';
+  const rows = field.stations ?? [];
+  st.querySelector('tbody').innerHTML = rows.length ? rows.map(s => {
+    const on = !exSta.has(stationKey(s));
+    return `<tr><td><span class="tick"><input type="checkbox" data-sta="${esc(stationKey(s))}"${on ? ' checked' : ''}
+        aria-label="Count ${esc(s.name ?? s.station_id)} for this field"></span></td>
+      <td${on ? '' : ' class="none"'}>${esc(s.name ?? s.station_id)} <span class="none">(${esc(s.station_id)})</span></td>
+      <td class="none">${esc(s.network)}</td><td${on ? '' : ' class="none"'}>${s.dist_km.toFixed(1)} km</td></tr>`;
+  }).join('') : '<tr><td colspan="4" class="none">No gauge within range — widen maxDistanceKm in config.json.</td></tr>';
+
+  st.querySelectorAll('[data-sta]').forEach(box => box.addEventListener('change', () => {
+    const next = new Set(exSta);
+    if (box.checked) next.delete(box.dataset.sta); else next.add(box.dataset.sta);
+    saveExclusions(field.id, { stations: [...next] }).then(ok => {
+      if (ok) exMsg(`${box.checked ? 'Counting' : 'Ignoring'} ${box.dataset.sta.split('|')[1]} for ${field.name}.`
+        + (box.checked ? '' : ' Run "npm run discover" to pull in the next gauge in range.'));
+    });
+  }));
+}
+
+/* ---------- field management ---------- */
 
 async function saveField(payload, method = 'POST', note = 'Saving…') {
   msg(note);

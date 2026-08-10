@@ -144,6 +144,15 @@ td.none { color: var(--text-muted); }
   border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
 }
 .fieldform input:focus { outline: 2px solid var(--series-gauge); outline-offset: -1px; }
+.toggles { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 2px 0 12px; }
+.toggles label {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;
+  color: var(--text-primary);
+}
+.toggles label.off { color: var(--text-muted); }
+.toggles .swatch { width: 10px; height: 10px; border-radius: 3px; }
+td .tick { display: flex; justify-content: flex-start; }
+
 /* Editable table cell: reads as text until focused, so the table still scans as
    a table rather than a form. */
 .cell {

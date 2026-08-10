@@ -19,6 +19,9 @@ export function haversineKm(lat1, lon1, lat2, lon2) {
 
 export const MM_TO_IN = 1 / 25.4;
 
+/** Every per-field daily series stored in `obs`. Order is display order. */
+export const SOURCES = ['gauge', 'rfcqpe', 'mrms', 'prism', 'iemre'];
+
 /** ISO date (YYYY-MM-DD) helpers, all in local calendar terms. */
 export function isoDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
