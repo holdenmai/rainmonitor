@@ -187,9 +187,14 @@ Both numbers are `gauges.listNearest` and `gauges.countNearest` in
 already has gauges keeps whatever is ticked, so changing them — or updating an
 existing install — never rewrites decisions already made.
 
-Which day actually uses which gauge is still nearest-first: of the gauges that
-count, the field takes the nearest one that **reported** that day. Ticking a
-second one on is a fallback for the days the first is silent, not an average.
+Each gauge you tick gets **its own line on the charts and its own column in the
+table**, so you see what each one actually said. The single derived figure —
+nearest gauge that reported that day — is still what the all-fields comparison,
+the CSV and the calibration use, since those need one number per field.
+
+The **Rain gauges** and **Manual gauges** checkboxes in the toggle row above the
+table switch off *all* of them at once for this field; the boxes in the table
+are the individual ones.
 
 It is stored per field in `config.json`:
 
@@ -275,13 +280,25 @@ a local file; treat it the way you treat `config.json`.
 | **RFC QPE** | NWS multi-sensor (radar + gauges + satellite) | ~4 km | **no** |
 | **MRMS** | Multi-Radar Multi-Sensor, gauge-corrected, via IEM | ~12 km | yes |
 | **PRISM** | Climate analysis blending gauges + terrain | 4 km | yes |
-| **Rain gauge** | Nearest *reporting* NWS COOP/ASOS or state mesonet station | a point | yes |
+| **Rain gauge** | Each nearby NWS COOP/ASOS or state mesonet station, on its own | a point | yes |
 | **Manual gauge** | A gauge you read by hand and type in yourself | a point | you type it |
 
 Each source is stored separately on purpose. **The disagreement between them is
 itself the signal** — when the radar says 0.6" and the gauge says 0.00", either
 that gauge is clogged, unread, or the storm genuinely missed it by a mile.
 Averaging them into one number throws that away.
+
+That applies to the gauges against each other, not just gauge against radar, so
+**every gauge that counts for a field is drawn as its own line**, named, rather
+than collapsed into one "rain gauge" figure. Two gauges four miles apart
+routinely disagree by half an inch on a summer storm, and the old single figure
+hid both the disagreement and which gauge you were reading on the days it fell
+through from one to the next.
+
+Up to four gauges are charted per field — that is how many colours stay apart
+from each other and from the three gridded sources, in both light and dark. Any
+beyond that still count towards the field's totals and the chart says so by
+name rather than dropping them quietly.
 
 Flat terrain with a nearby NEXRAD gives noticeably better radar QPE than
 mountainous country, where beam blockage is a real problem. Resolution matters

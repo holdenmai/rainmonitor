@@ -40,7 +40,41 @@ const excludedSources = fieldId =>
   new Set(cfg.fields.find(f => f.id === fieldId)?.exclude?.sources ?? []);
 
 /**
- * Wide rows: one per field-date, one column per source.
+ * The gauges that count for a field, nearest first, as chartable series.
+ *
+ * Capped at GAUGE_SLOTS because each one needs a colour of its own and the
+ * palette has that many that stay distinguishable beside the three gridded
+ * hues, in both themes, at every count from one to four. Anything past that is
+ * still counted in the derived `gauge` figure — it just does not get a line.
+ */
+const GAUGE_SLOTS = 4;
+
+function fieldGauges(fieldId) {
+  const ex = excludedSources(fieldId);
+  return db.prepare(`SELECT fs.network, fs.station_id, fs.dist_km, s.name
+    FROM field_station fs LEFT JOIN station s ON s.id = fs.station_id AND s.network = fs.network
+    WHERE fs.field_id = ? AND fs.excluded = 0 ORDER BY fs.dist_km`).all(fieldId)
+    .filter(g => !ex.has(g.network === 'MANUAL' ? 'manual' : 'gauge'))
+    .map(g => ({
+      key: `g:${g.network}|${g.station_id}`,
+      station_id: g.station_id, network: g.network,
+      name: g.name ?? g.station_id, dist_km: g.dist_km,
+      manual: g.network === 'MANUAL',
+    }));
+}
+
+/** The ones that get a line and a column. The rest still count towards the
+ *  derived `gauge` figure; they just have no colour left. */
+const chartGauges = fieldId => fieldGauges(fieldId).slice(0, GAUGE_SLOTS);
+
+/**
+ * Wide rows: one per field-date, a column per source and one per gauge.
+ *
+ * The per-gauge columns come straight from `station_obs` — raw, not derived —
+ * because the point of showing them separately is that they disagree. The
+ * derived `gauge` column is still here beside them; it is the same readings
+ * collapsed to nearest-that-reported, which is what a single number per field
+ * has to be.
  *
  * Excluded sources are blanked here rather than filtered in SQL, so every
  * downstream view — KPI tiles, charts, table, CSV — honours the exclusion from
@@ -66,6 +100,29 @@ function series(fieldId, since) {
     if (ex.has('gauge')) r.gauge_src = null;
     if (ex.has('manual')) r.manual_src = null;
   }
+
+  // One column per counting gauge. A station can have a reading on a date with
+  // no obs row of its own — an excluded source still derives, but a field whose
+  // only gauge went quiet has gridded rows and nothing else — so dates are
+  // added rather than assumed to be there already.
+  const gauges = chartGauges(fieldId);
+  if (gauges.length) {
+    const want = new Set(gauges.map(g => `${g.network}|${g.station_id}`));
+    const byDate = new Map(rows.map(r => [r.date, r]));
+    let added = false;
+    for (const v of db.prepare(`SELECT so.network, so.station_id, so.date, so.precip_in
+      FROM station_obs so
+      JOIN field_station fs ON fs.network = so.network AND fs.station_id = so.station_id
+      WHERE fs.field_id = ? AND fs.excluded = 0 AND so.date >= ? AND so.precip_in IS NOT NULL`)
+      .all(fieldId, since)) {
+      const id = `${v.network}|${v.station_id}`;
+      if (!want.has(id)) continue;
+      let r = byDate.get(v.date);
+      if (!r) { r = { date: v.date }; byDate.set(v.date, r); rows.push(r); added = true; }
+      r[`g:${id}`] = v.precip_in;
+    }
+    if (added) rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  }
   return rows;
 }
 
@@ -77,16 +134,18 @@ const sum = (rows, k) => {
 function summary(fieldId) {
   const end = today();
   const rows = series(fieldId, seasonStart());
+  const gauges = chartGauges(fieldId);
+  const keys = [...SOURCES, ...gauges.map(g => g.key)];
   const win = n => rows.filter(r => r.date > addDays(end, -n));
-  const out = { field_id: fieldId };
+  const out = { field_id: fieldId, gauges };
   for (const [label, subset] of [['d1', win(1)], ['d7', win(7)], ['d30', win(30)],
                                  ['season', rows], ['growing', rows.filter(r => r.date >= growStart())]]) {
-    out[label] = Object.fromEntries(SOURCES.map(s => [s, sum(subset, s)]));
+    out[label] = Object.fromEntries(keys.map(s => [s, sum(subset, s)]));
   }
   // Days since the last measurable rain (>= 0.01 in) on any source.
   let dry = null;
   for (let i = rows.length - 1; i >= 0; i--) {
-    if (SOURCES.some(s => (rows[i][s] ?? 0) >= 0.01)) {
+    if (keys.some(s => (rows[i][s] ?? 0) >= 0.01)) {
       dry = Math.max(0, Math.round((new Date(end) - new Date(rows[i].date)) / 86400000));
       break;
     }
@@ -393,7 +452,15 @@ const server = createServer(async (req, res) => {
     }
     if (p === '/api/series') {
       const days = Math.min(Number(url.searchParams.get('days')) || 60, 3000);
-      return json(res, { rows: series(url.searchParams.get('field'), addDays(today(), -days)) });
+      const field = url.searchParams.get('field');
+      const all = fieldGauges(field);
+      // The cap is reported, not silently applied: a gauge that counts towards
+      // the field's figure but has no line of its own has to say so.
+      return json(res, {
+        rows: series(field, addDays(today(), -days)),
+        gauges: all.slice(0, GAUGE_SLOTS),
+        uncharted: all.slice(GAUGE_SLOTS).map(g => g.name),
+      });
     }
     if (p === '/api/summary') return json(res, { summaries: cfg.fields.map(f => summary(f.id)) });
     if (p === '/api/calibration') return json(res, calibration(db, cfg) ?? {});

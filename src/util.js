@@ -19,8 +19,23 @@ export function haversineKm(lat1, lon1, lat2, lon2) {
 
 export const MM_TO_IN = 1 / 25.4;
 
-/** Every per-field daily series stored in `obs`. Order is display order. */
-export const SOURCES = ['gauge', 'manual', 'rfcqpe', 'mrms', 'prism', 'iemre'];
+/**
+ * Every per-field daily series stored in `obs`. Order is display order.
+ *
+ * `gauge` and `manual` are the derived nearest-reporting figures. The charts
+ * draw the individual gauges behind them instead, but these stay: they are the
+ * one-number-per-field answer the all-fields comparison and the calibration
+ * need, and the two names are also what `exclude.sources` switches off.
+ *
+ * prism sits before mrms because the display order is also the order colours
+ * land next to each other, and yellow (rfcqpe) beside orange (mrms) is the one
+ * adjacent pair in this palette that full-colour vision struggles with. Aqua
+ * between them fixes it. See web/style.css.
+ */
+export const SOURCES = ['gauge', 'manual', 'rfcqpe', 'prism', 'mrms', 'iemre'];
+
+/** The gridded series, in display order — everything that is not a gauge. */
+export const GRID_SOURCES = SOURCES.filter(s => s !== 'gauge' && s !== 'manual');
 
 /** YYYY-MM-DD, and a real calendar date — not 2026-02-31. */
 export function isIsoDate(s) {

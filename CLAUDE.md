@@ -168,9 +168,21 @@ framework and no bundler — it is served as-is.
 - **`SOURCES` in `src/util.js` is the registry** of per-field daily series, and
   its order is display order. Adding a source means: a module in `src/sources/`,
   wiring in `src/ingest.js`, an entry in `SOURCES`, a section in
-  `config.example.json`, and — if it should be charted — `ALL_SERIES` in
+  `config.example.json`, and — if it should be charted — `GRID_SERIES` in
   `web/app.js` plus a `--series-*` colour in `web/style.css`. (`iemre` is stored
   and exportable but intentionally not charted.)
+- **The charts draw individual gauges, not the derived `gauge` series.**
+  `series()` adds a `g:<network>|<station>` column per counting gauge straight
+  from `station_obs`; `obs.gauge` stays as the one-number-per-field answer the
+  all-fields chart, the calibration and the CSV need. Charted gauges are capped
+  at `GAUGE_SLOTS` (4) and the rest are named in the response's `uncharted`, so
+  the cap is stated rather than silent.
+- **The series palette is validated per prefix, not once.** A field draws a
+  different number of gauge series, so `--series-g1..g4` followed by rfcqpe /
+  prism / mrms was ordered so that *every* prefix clears the adjacent-pair CVD
+  and normal-vision gates in both themes. That is why `SOURCES` has prism before
+  mrms — yellow next to orange fails, aqua between them passes. Re-run the
+  dataviz validator before touching any `--series-*` value or the display order.
 - **Migrations are idempotent and run on every `openDb()`**: `CREATE TABLE IF
   NOT EXISTS` plus `addColumn()` in `src/db.js:migrate()`. There is no migration
   runner and no version number; whichever process opens the db first upgrades it.

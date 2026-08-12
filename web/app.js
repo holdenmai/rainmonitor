@@ -1,14 +1,50 @@
-const ALL_SERIES = [
-  { key: 'gauge',  label: 'Rain gauge',   color: 'var(--series-gauge)',  note: 'nearest reporting station' },
-  { key: 'manual', label: 'Manual gauge', color: 'var(--series-manual)', note: 'read by hand' },
-  { key: 'rfcqpe', label: 'RFC QPE 4km',  color: 'var(--series-rfcqpe)', note: 'NWS multi-sensor, finest grid here' },
-  { key: 'mrms',   label: 'Radar QPE',    color: 'var(--series-mrms)',   note: 'MRMS via IEM, ~12km' },
-  { key: 'prism',  label: 'PRISM',        color: 'var(--series-prism)',  note: '4km climate analysis' },
+/**
+ * The gridded series, in the order the palette was validated for — see the
+ * note in style.css. rfcqpe / prism / mrms, not rfcqpe / mrms / prism, because
+ * yellow beside orange is the one adjacent pair here that full-colour vision
+ * struggles with and aqua between them fixes it.
+ */
+const GRID_SERIES = [
+  { key: 'rfcqpe', label: 'RFC QPE 4km', color: 'var(--series-rfcqpe)', note: 'NWS multi-sensor, finest grid here' },
+  { key: 'prism',  label: 'PRISM',       color: 'var(--series-prism)',  note: '4km climate analysis' },
+  { key: 'mrms',   label: 'Radar QPE',   color: 'var(--series-mrms)',   note: 'MRMS via IEM, ~12km' },
 ];
-// What is actually drawn. Narrowed to the sources in play, so a farm with no
-// hand-read gauge does not get a fifth legend entry, a fifth bar slot and a
-// permanent "no data yet" for a source it does not have.
-let SERIES = ALL_SERIES;
+
+/** What `exclude.sources` can switch off. Gauges are switched off individually,
+ *  in the table below the toggles, so these two are the "all of them" case. */
+const SOURCE_TOGGLES = [
+  { key: 'gauge',  label: 'Rain gauges' },
+  { key: 'manual', label: 'Manual gauges' },
+  ...GRID_SERIES,
+];
+
+/** Every source the export picker offers, matching SOURCES on the server. */
+const EXPORT_SOURCES = [
+  { key: 'gauge', label: 'Rain gauges' }, { key: 'manual', label: 'Manual gauges' },
+  ...GRID_SERIES.map(s => ({ key: s.key, label: s.label })),
+  { key: 'iemre', label: 'IEM reanalysis' },
+];
+
+/**
+ * One line per gauge, nearest first, rather than a single "Rain gauge" that
+ * silently switches between them from day to day.
+ *
+ * Two gauges four miles apart routinely disagree by half an inch on a summer
+ * storm, and that disagreement is the reason for having both. Collapsing them
+ * to the nearest one that reported hid it — and hid which gauge you were
+ * reading, on the days it changed.
+ */
+const gaugeSeries = gauges => gauges.map((g, i) => ({
+  key: g.key,
+  label: g.name,
+  color: `var(--series-g${i + 1})`,
+  note: `${g.manual ? 'read by hand' : g.network.replace(/_/g, ' ')}, ${g.dist_km.toFixed(1)} km`,
+  gauge: g,
+}));
+
+// What is actually drawn, rebuilt per field: which gauges a field has, and how
+// many of them count, is a property of the field.
+let SERIES = GRID_SERIES;
 const SVG = 'http://www.w3.org/2000/svg';
 const el = (n, a = {}, kids = []) => {
   const e = document.createElementNS(SVG, n);
@@ -49,8 +85,12 @@ const hideTip = () => { tip.hidden = true; };
 
 function legendInto(node, items, notes = {}) {
   node.innerHTML = items.map(s =>
-    `<span class="item"><span class="swatch" style="background:${s.color}"></span>${s.label}`
-    + (notes[s.key] ? ` <span class="none">${notes[s.key]}</span>` : '') + '</span>').join('');
+    `<span class="item"><span class="swatch" style="background:${s.color}"></span>${esc(s.label)}`
+    // Only the gauges carry their note into the legend — which network and how
+    // far out — because that is what tells two station names apart. The gridded
+    // sources are described in the card's own text.
+    + (s.gauge ? ` <span class="none">${esc(s.note)}</span>` : '')
+    + (notes[s.key] ? ` <span class="none">${esc(notes[s.key])}</span>` : '') + '</span>').join('');
 }
 
 /* ---------- Chart 1: daily rainfall, grouped bars ---------- */
@@ -64,7 +104,13 @@ function drawDaily(svg, rows, binLabel) {
   const { top, ticks } = niceTicks(max);
   const y = v => m.t + ph - (v / top) * ph;
   const gw = pw / rows.length;
-  const bw = Math.max(1.5, (gw - 6) / SERIES.length - 2);   // 2px surface gap between adjacent bars
+  // Slot the bars rather than sizing them and hoping. The old form subtracted a
+  // fixed 2px gap and clamped the remainder, so once the group got tight the
+  // bars kept their stride and marched over the next day's slot — already true
+  // at 90 days, and worse now a field can draw seven series. The gap shrinks
+  // with the slot instead, which keeps the group inside its own day.
+  const slot = Math.max(0.8, (gw - 4) / SERIES.length);
+  const bw = Math.max(0.8, slot - Math.min(2, slot * 0.3));  // surface gap between adjacent bars
 
   for (const t of ticks) {
     svg.append(el('line', { class: 'grid-line', x1: m.l, x2: m.l + pw, y1: y(t), y2: y(t) }));
@@ -81,17 +127,18 @@ function drawDaily(svg, rows, binLabel) {
     SERIES.forEach((s, si) => {
       const v = r[s.key];
       if (!has(v)) return;
-      const bx = gx + 3 + si * (bw + 2);
+      const bx = gx + 2 + si * slot;
       svg.append(el('path', { d: barPath(bx, y(v), bw, y(0) - y(v)), fill: s.color }));
     });
 
     band.addEventListener('mousemove', e => {
       band.classList.add('on');
+      // Each gauge names itself here, so the old "which station did this figure
+      // come from" footnote has nothing left to explain.
       showTip(e, r.date, SERIES.map(s => ({
-        k: `<span class="dot" style="background:${s.color}"></span>${s.label}`,
+        k: `<span class="dot" style="background:${s.color}"></span>${esc(s.label)}`,
         v: has(r[s.key]) ? `${fmt(r[s.key])}"` : 'no report',
-      })), [r.gauge_src && `Gauge: ${r.gauge_src}`, r.manual_src && `Manual: ${r.manual_src}`]
-        .filter(Boolean).join('<br>') || null);
+      })));
     });
     band.addEventListener('mouseleave', () => { band.classList.remove('on'); hideTip(); });
 
@@ -134,17 +181,34 @@ function drawCumulative(svg, rows) {
   }
   svg.append(el('line', { class: 'axis-line', x1: m.l, x2: m.l + pw, y1: y(0), y2: y(0) }));
 
+  const ends = [];
   for (const s of drawn) {
     const off = from[s.key];
     svg.append(el('path', {
       d: cum[s.key].map((v, i) => `${i ? 'L' : 'M'}${x(i + off).toFixed(1)} ${y(v).toFixed(1)}`).join(' '),
       fill: 'none', stroke: s.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
     }));
-    // Direct label at the line end — identity without relying on the legend alone.
     const last = cum[s.key].at(-1);
     svg.append(el('circle', { cx: x(rows.length - 1), cy: y(last), r: 4, fill: s.color, stroke: 'var(--surface-1)', 'stroke-width': 2 }));
-    svg.append(el('text', { class: 'dlabel', x: x(rows.length - 1) + 10, y: y(last) + 4 },
-      [`${s.label} ${last.toFixed(2)}"`]));
+    ends.push({ s, last, at: y(last) });
+  }
+
+  // Direct labels at the line ends — identity without relying on the legend
+  // alone. Two sources that agree land on the same pixel, which with seven
+  // series is the normal case rather than the unlucky one, so they are nudged
+  // apart afterwards: the dot stays on the data, only the text moves.
+  const GAP = 13;
+  ends.sort((a, b) => a.at - b.at);
+  let floor = m.t + 4;
+  for (const e of ends) { e.y = Math.max(e.at, floor); floor = e.y + GAP; }
+  const over = ends.length ? ends.at(-1).y - (m.t + ph) : 0;
+  if (over > 0) for (const e of ends) e.y -= over;
+  for (const e of ends) {
+    // The margin holds roughly this much text; a COOP station name can be far
+    // longer than the label slot, and the legend spells it out in full.
+    const name = e.s.label.length > 13 ? `${e.s.label.slice(0, 12)}…` : e.s.label;
+    svg.append(el('text', { class: 'dlabel', x: x(rows.length - 1) + 10, y: e.y + 4 },
+      [`${name} ${e.last.toFixed(2)}"`]));
   }
 
   const every = Math.max(1, Math.ceil(rows.length / 10));
@@ -163,7 +227,7 @@ function drawCumulative(svg, rows) {
     showTip(e, `Through ${rows[i].date}`, drawn.map(s => {
       const j = i - from[s.key];
       return {
-        k: `<span class="dot" style="background:${s.color}"></span>${s.label}`,
+        k: `<span class="dot" style="background:${s.color}"></span>${esc(s.label)}`,
         v: j < 0 ? 'not collecting yet' : `${cum[s.key][j].toFixed(2)}"`,
       };
     }));
@@ -367,16 +431,15 @@ function wireCoordPaste(form) {
 async function load() {
   const fieldId = $('fieldSel').value;
   const days = Number($('rangeSel').value);
-  // Scoped to the field on screen, not to the config: a manual gauge eight
-  // miles away is a source this field simply does not have, and listing it as
-  // "no data yet" reads as a gauge that has stopped reporting.
-  const hasManual = f => (f?.stations ?? []).some(s => s.network === 'MANUAL' && !s.excluded);
-  SERIES = ALL_SERIES.filter(s => s.key !== 'manual' || hasManual(META.fields.find(f => f.id === fieldId)));
-  const [{ rows }, { summaries }, cal] = await Promise.all([
+  const [{ rows, gauges, uncharted }, { summaries }, cal] = await Promise.all([
     fetch(`/api/series?field=${fieldId}&days=${days}`).then(r => r.json()),
     fetch('/api/summary').then(r => r.json()),
     fetch('/api/calibration').then(r => r.json()),
   ]);
+  // Scoped to the field on screen: its gauges, in its order. A field with no
+  // gauge in range draws the gridded sources and nothing else, rather than a
+  // permanent "no data yet" for a gauge it does not have.
+  SERIES = [...gaugeSeries(gauges ?? []), ...GRID_SERIES];
   const me = summaries.find(s => s.field_id === fieldId) ?? {};
   const field = META.fields.find(f => f.id === fieldId);
 
@@ -387,20 +450,22 @@ async function load() {
   // exists from the day it was switched on, so older windows fall back to MRMS
   // and the tile says which one it is rather than quietly mixing them.
   const tile = (label, w, extra) => {
-    const d = pick(w), g = d.gauge;
+    const d = pick(w);
     const fine = has(d.rfcqpe) && d.rfcqpe > 0;
     const r = fine ? d.rfcqpe : d.mrms;
     const src = fine ? 'RFC QPE 4km' : 'Radar QPE ~12km';
     const col = fine ? 'var(--series-rfcqpe)' : 'var(--series-mrms)';
-    // The hand-read line only appears once a manual gauge covers this field —
-    // a permanent "manual no report" would read as a gauge that is failing.
-    const manual = SERIES.some(s => s.key === 'manual') && has(d.manual)
-      ? `<div class="meta"><span class="swatch" style="background:var(--series-manual)"></span>manual ${d.manual.toFixed(2)}"</div>` : '';
+    // A line per gauge rather than one "gauge" figure: two gauges that read
+    // differently over the same week is the thing worth seeing at a glance,
+    // and it is exactly what a single number was hiding. Names are clipped by
+    // CSS — the legend under the chart spells them out.
+    const lines = SERIES.filter(s => s.gauge).map(s =>
+      `<div class="meta" title="${esc(s.label)}"><span class="swatch" style="background:${s.color}"></span>`
+      + `${esc(s.label)} ${has(d[s.key]) ? d[s.key].toFixed(2) + '"' : 'no report'}</div>`).join('');
     return `<div class="tile"><div class="label">${label}</div>
       <div class="value">${has(r) ? r.toFixed(2) : '—'}<span class="unit">in</span></div>
       <div class="meta"><span class="swatch" style="background:${col}"></span>${src}</div>
-      <div class="meta"><span class="swatch" style="background:var(--series-gauge)"></span>gauge ${has(g) ? g.toFixed(2) + '"' : 'no report'}</div>
-      ${manual}${extra ? `<div class="meta">${extra}</div>` : ''}</div>`;
+      ${lines}${extra ? `<div class="meta">${extra}</div>` : ''}</div>`;
   };
   const dry = me.days_since_rain;
   $('kpis').innerHTML =
@@ -416,12 +481,16 @@ async function load() {
   const chartRows = weekly ? binWeekly(rows) : rows;
   const rfcFrom = rows.find(r => has(r.rfcqpe))?.date;
   $('dailyNote').textContent = (weekly
-    ? 'Weekly totals. A blank slot means no source reported for that week. '
-    : 'One bar per source per day. A missing bar means that source reported nothing — not that it stayed dry. ')
+    ? 'Weekly totals. A blank slot means nothing reported for that week. '
+    : 'One bar per series per day. A missing bar means that one reported nothing — not that it stayed dry. ')
+    + 'Each gauge is drawn on its own; where two of them disagree, that is two readings of two different pieces of ground, not an error. '
     + 'PRISM and RFC QPE both run on a 12Z–12Z day, so a single storm can land on either side of midnight local; compare those over a week, not a day. '
     + (rfcFrom
         ? `RFC QPE is the finest grid here (~4 km) but publishes no archive, so it only exists from ${rfcFrom} forward.`
-        : 'RFC QPE (~4 km) starts collecting on the next ingest — it publishes no archive, so it cannot be backfilled.');
+        : 'RFC QPE (~4 km) starts collecting on the next ingest — it publishes no archive, so it cannot be backfilled.')
+    + (uncharted?.length
+        ? ` ${uncharted.join(' and ')} also count${uncharted.length === 1 ? 's' : ''} for this field but ${uncharted.length === 1 ? 'is' : 'are'} not drawn — there are four gauge colours that stay apart from each other and from the grid.`
+        : '');
   // Flag series that only start partway through the range, so a short line
   // never reads as a source that measured nothing.
   const starts = {};
@@ -467,12 +536,15 @@ async function load() {
   }
 
   // Table view — satisfies the relief rule for the sub-3:1 light-mode series.
+  // Every gauge is its own column now, so the old "Gauge station" column —
+  // which named whichever one the derived figure had fallen through to that
+  // day — has nothing left to say.
   $('dataTable').querySelector('thead').innerHTML =
-    `<tr><th>Date</th>${SERIES.map(s => `<th><span class="dot" style="background:${s.color}"></span>${s.label}</th>`).join('')}<th>Gauge station</th></tr>`;
+    `<tr><th>Date</th>${SERIES.map(s =>
+      `<th><span class="dot" style="background:${s.color}"></span>${esc(s.label)}</th>`).join('')}</tr>`;
   $('dataTable').querySelector('tbody').innerHTML = [...rows].reverse().map(r =>
     `<tr><td>${r.date}</td>${SERIES.map(s =>
-      has(r[s.key]) ? `<td>${r[s.key].toFixed(2)}</td>` : '<td class="none">—</td>').join('')}
-     <td class="none">${r.gauge_src ?? '—'}</td></tr>`).join('');
+      has(r[s.key]) ? `<td>${r[s.key].toFixed(2)}</td>` : '<td class="none">—</td>').join('')}</tr>`).join('');
 
   renderExclusions(field);
   renderFields();
@@ -672,7 +744,7 @@ const importMsg = (t, bad) => note('importMsg', t, bad);
 let exportSrc = new Set();
 
 function renderExportSources() {
-  const opts = ALL_SERIES.concat([{ key: 'iemre', label: 'IEM reanalysis' }]);
+  const opts = EXPORT_SOURCES;
   $('exportSourceOptions').innerHTML =
     `<label><input type="checkbox" data-esrc="*" ${exportSrc.size ? '' : 'checked'}>All sources</label><div class="sep"></div>`
     + opts.map(o => `<label><input type="checkbox" data-esrc="${o.key}"${exportSrc.has(o.key) ? ' checked' : ''}>${esc(o.label)}</label>`).join('');
@@ -1045,10 +1117,13 @@ function renderExclusions(field) {
   const exSta = new Set(rows.filter(s => s.excluded).map(stationKey));
   $('exField').textContent = field.name;
 
-  $('sourceToggles').innerHTML = SERIES.map(s => {
+  // The fixed source list, not the field's drawn series: "Rain gauges" here
+  // means all of them at once, and the individual ones have their own boxes in
+  // the table below. Two controls for the same gauge would be one too many.
+  $('sourceToggles').innerHTML = SOURCE_TOGGLES.map(s => {
     const on = !exSrc.has(s.key);
     return `<label class="${on ? '' : 'off'}"><input type="checkbox" data-src="${s.key}"${on ? ' checked' : ''}>
-      <span class="swatch" style="background:${s.color}"></span>${s.label}</label>`;
+      ${s.color ? `<span class="swatch" style="background:${s.color}"></span>` : ''}${s.label}</label>`;
   }).join('');
   $('sourceToggles').querySelectorAll('[data-src]').forEach(box => box.addEventListener('change', () => {
     const next = new Set(exSrc);
