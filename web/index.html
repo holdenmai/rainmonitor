@@ -169,11 +169,57 @@
     <p class="note" id="importMsg" style="margin:8px 0 6px"></p>
   </section>
 
+  <section class="card" id="backupCard">
+    <div class="card-head">
+      <div>
+        <h2>Backup &amp; restore</h2>
+        <p class="note">Everything in one file: your settings, fields, manual gauges, weather station and the whole rainfall database. This is how you set a second computer up as a copy of this one, or move to a new machine — download it here, restore it there.</p>
+        <p class="note" style="margin-top:6px"><strong>Restoring replaces everything on this machine.</strong> It is not a merge — use <em>Export &amp; import</em> above for two machines that are both already collecting. A copy of what is here now is saved to <code>data/backups</code> first, so a restore onto the wrong machine can be undone.</p>
+      </div>
+      <div class="jobactions">
+        <a class="btn" id="backupBtn" href="/api/backup.json" download>Download full backup</a>
+      </div>
+    </div>
+    <p class="jobstatus" id="backupStatus"></p>
+
+    <form id="restoreForm" class="fieldform">
+      <label><span>Restore from a backup file</span><input name="file" type="file" accept=".json,application/json" required></label>
+      <label class="check"><input name="force" type="checkbox"><span>Restore even if the versions cannot be matched</span></label>
+      <button class="btn danger" type="submit">Replace everything on this machine</button>
+    </form>
+    <p class="note" id="restoreMsg" style="margin:8px 0 6px"></p>
+  </section>
+
+  <section class="card" id="stationCard">
+    <div class="card-head">
+      <div>
+        <h2>Your own weather station</h2>
+        <p class="note">A Davis — or anything else publishing WeatherLink's NOAA-format reports: <code>NOAAMO.txt</code> for the current month's daily rows, <code>NOAAYR.txt</code> for the year's monthly totals. It stands on your own ground, so it ranks first for whichever fields are nearest and becomes the reference the radar is checked against.</p>
+        <p class="note" style="margin-top:6px">Use the <em>station's</em> coordinates, not a field's. <strong>Test the addresses</strong> and it reads them out of the report header for you. You can also paste a <code>latitude, longitude</code> pair into either box and both fill in.</p>
+      </div>
+    </div>
+    <p class="jobstatus" id="stationStatus"></p>
+
+    <form id="stationForm" class="fieldform">
+      <label><span>Station name</span><input name="name" placeholder="Home Place Davis" required></label>
+      <label><span>Latitude</span><input name="lat" type="number" step="any" placeholder="39.3861" required></label>
+      <label><span>Longitude</span><input name="lon" type="number" step="any" placeholder="-101.0523" required></label>
+      <label><span>Elevation <em>(ft, optional)</em></span><input name="elev_ft" type="number" step="any" placeholder="3600"></label>
+      <label><span>Covers within <em>(km)</em></span><input name="maxDistanceKm" type="number" step="any" min="0" placeholder="30"></label>
+      <label><span>Daily report <em>(NOAAMO.txt)</em></span><input class="wide" name="dailyUrl" type="url" placeholder="http://example.com/weather/NOAAMO.txt" required></label>
+      <label><span>Yearly report <em>(NOAAYR.txt, optional)</em></span><input class="wide" name="yearlyUrl" type="url" placeholder="http://example.com/weather/NOAAYR.txt"></label>
+      <button class="btn" type="button" id="stationTest">Test the addresses</button>
+      <button class="btn primary" type="submit" id="stationSave">Add station</button>
+      <button class="btn danger" type="button" id="stationRemove" hidden>Remove</button>
+    </form>
+    <p class="note" id="stationMsg" style="margin:8px 0 6px"></p>
+  </section>
+
   <section class="card">
     <div class="card-head">
       <div>
         <h2>Manual gauges</h2>
-        <p class="note">Gauges you read yourself — the stick by the weather station, a neighbour's gauge near a field. Nothing fetches these, so they are never overwritten by an ingest. They rank by distance like any other gauge and are charted as their own series, so they stay an independent check rather than getting averaged into the automatic number.</p>
+        <p class="note">Gauges you read yourself — the stick by the weather station, a neighbour's gauge near a field. Nothing fetches these, so they are never overwritten by an ingest. They rank by distance like any other gauge and are charted as their own series, so they stay an independent check rather than getting averaged into the automatic number. Paste a <code>latitude, longitude</code> pair into either coordinate box and both fill in.</p>
       </div>
     </div>
     <div class="table-wrap"><table id="gaugeTable"><thead></thead><tbody></tbody></table></div>
@@ -200,7 +246,7 @@
     <div class="card-head">
       <div>
         <h2>Fields</h2>
-        <p class="note">Acres and farm save as soon as you leave the box. Adding or moving a field maps its nearby gauges and pulls its history automatically — watch it happen under Data collection below.</p>
+        <p class="note">Acres and farm save as soon as you leave the box. Adding or moving a field maps its nearby gauges and pulls its history automatically — watch it happen under Data collection above. Paste a <code>latitude, longitude</code> pair straight out of a map into either coordinate box and both fill in.</p>
       </div>
     </div>
     <div class="table-wrap"><table id="fieldTable"><thead></thead><tbody></tbody></table></div>

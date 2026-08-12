@@ -56,7 +56,7 @@
     "weatherlink": {
       "enabled": false,
       "label": "On-farm weather station",
-      "_comment": "For a Davis (or any station) publishing WeatherLink's NOAA-format reports. Set enabled true and point dailyUrl/yearlyUrl at your own NOAAMO.txt and NOAAYR.txt. lat/lon should be the STATION's position, which its NOAAMO.txt header prints in deg/min/sec. This becomes ground truth and drives `npm run calibrate`. NOTE: NOAAMO.txt holds only the current month and is overwritten at month roll, so daily history accumulates from your first run — run the ingest at least monthly.",
+      "_comment": "For a Davis (or any station) publishing WeatherLink's NOAA-format reports. Add it from the dashboard rather than by hand — \"Your own weather station\" tests the two URLs and reads the station's coordinates out of the report header, which prints them in deg/min/sec. lat/lon must be the STATION's position, not a field's. This becomes ground truth and drives `npm run calibrate`. NOTE: NOAAMO.txt holds only the current month and is overwritten at month roll, so daily history accumulates from your first run — run the ingest at least monthly.",
       "stationId": "MYSTATION",
       "name": "My Farm Station",
       "lat": null,

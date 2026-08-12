@@ -18,6 +18,8 @@
     "remove-field": "node src/cli.js remove-field",
     "export": "node src/cli.js export",
     "import": "node src/cli.js import",
+    "backup": "node src/cli.js backup",
+    "restore": "node src/cli.js restore",
     "check": "node scripts/check-alignment.mjs",
     "calibrate": "node scripts/calibrate.mjs"
   }

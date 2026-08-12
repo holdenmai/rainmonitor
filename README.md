@@ -110,6 +110,14 @@ western hemisphere** — `-101.049`, not `101.049`. That is the single most comm
 setup mistake, so both entry paths reject a positive longitude in US latitudes
 rather than silently returning no data forever.
 
+Paste a **pair** into either coordinate box — `39.4310, -101.0490` straight out
+of Google Maps — and both fill in. Decimal, degrees/minutes/seconds and
+hemisphere letters all work, in either order, so `101° 02' 56" W 39° 25' 52" N`
+lands the right way round. The boxes are numeric, and a numeric box silently
+discards a paste containing a comma, so without this you would get an empty box
+and no explanation. It works the same in the manual gauge and weather station
+forms.
+
 Your state, the gauge networks that cover it, and whether a state mesonet applies
 are all detected from your coordinates and written back into `config.json`. To
 pin them yourself, edit `region.states` and set `region.autoDetected` to `false`.
@@ -216,6 +224,38 @@ For a new machine, run `npm run discover` before importing. Station readings can
 only become a field's gauge figure once that field has gauges mapped; the import
 says so by name when some field does not.
 
+### Copying a whole machine
+
+Export/import is for two machines that are **both** collecting and need each
+other's gaps filled. Setting a *new* machine up is a different job, and the
+**Backup & restore** panel does it in one file: `config.json` and every table,
+so the target becomes a copy of the source.
+
+```bash
+npm run backup                                  # rainmonitor-backup_2026-08-12.json
+npm run restore -- --file that-file.json        # replaces everything here
+```
+
+Both are in the dashboard too, and restoring there restarts it onto the restored
+settings by itself.
+
+- **Restoring replaces, it does not merge.** That is the point — a "restore" that
+  left the target's own leftovers behind would not be one. Use export/import to
+  combine two machines that are each already collecting.
+- **Both machines must be on the same version.** A backup writes rows straight
+  back into the tables they came from, and only a matching commit guarantees they
+  still mean the same thing. The commit is recorded in the file and checked on
+  the way in; a mismatch is refused with both versions named. `--force` (or the
+  override box) exists for a copy installed from a zip, which has no version to
+  compare — it still refuses if the columns do not line up.
+- **What is here now is saved first**, to `data/backups/before-restore-<time>.json`,
+  before anything is overwritten. Restoring the wrong file onto the wrong machine
+  is a mistake somebody makes while setting up three computers in an afternoon,
+  and it would otherwise be unrecoverable.
+
+The backup contains your station's address and all your field coordinates. It is
+a local file; treat it the way you treat `config.json`.
+
 ## Where the numbers come from
 
 | Source | What it is | Resolution | Backfills? |
@@ -240,13 +280,34 @@ the next — which is exactly what a gauge fifteen miles away cannot resolve.
 ### Using your own weather station
 
 If you have a station publishing WeatherLink's NOAA reports (`NOAAMO.txt` and
-`NOAAYR.txt`), point `sources.weatherlink` at it in `config.json` and set
-`enabled` to `true`. Use the **station's** coordinates — its `NOAAMO.txt` header
-prints them in degrees/minutes/seconds.
+`NOAAYR.txt`) — a Davis, or anything else that emits the same format — add it in
+the dashboard's **Your own weather station** panel: a name, the station's
+coordinates, and the two report addresses.
 
-It then ranks as just another gauge, by distance, so it wins automatically for
+**Test the addresses** before saving. It fetches both, says how many days and
+months came back and how much rain that is, and **fills the coordinates and
+elevation in from the report header** — which prints them in
+degrees/minutes/seconds, the one number in this setup that needs a conversion.
+Pointing these URLs at the wrong file is the mistake that costs the most,
+because a wrong one looks fine and only shows up months later as a series that
+never started.
+
+Use the **station's** position, not a field's. Saving links it to every field
+within its range immediately — that is arithmetic on coordinates already on the
+machine, so it does not wait on the network — and then queues a read of both
+reports back to the first of the month.
+
+It ranks as just another gauge, by distance, so it wins automatically for
 whichever fields are closest. It also becomes the reference for
 [calibration](#calibrating-radar-against-your-own-station).
+
+Removing it keeps its readings, so putting the same station back picks the
+history up again. That matters more here than anywhere else: `NOAAMO.txt` is
+overwritten every month, so what is stored is the only copy that exists.
+
+There is one station, not a list — it is the one on your own ground, and it is
+what the radar is measured against. Other gauges you own are
+[manual gauges](#gauges-you-read-yourself).
 
 > `NOAAMO.txt` holds only the **current month** and is overwritten at month roll.
 > Miss a month and those daily values are gone permanently. `NOAAYR.txt` keeps
@@ -382,14 +443,15 @@ Setup.cmd                     double-click installer (Windows)
 scripts/setup.ps1             what it runs: autostart, shortcut, config
 config.example.json           template; npm run init copies it to config.json
 config.json                   YOUR setup — gitignored, never committed
-src/cli.js                    init | discover | ingest | backfill | export | import
-src/setup.js                  config read/write, field + gauge validation
+src/cli.js                    init | discover | ingest | backfill | export | import | backup | restore
+src/setup.js                  config read/write, field + gauge + station validation
 src/region.js                 lat/lon -> state -> gauge networks
 src/ingest.js                 pull the sources
 src/derive.js                 station readings -> each field's gauge figure
 src/jobs.js                   in-dashboard scheduler + background job runner
 src/update.js                 git update check, fast-forward, restart
 src/sync.js                   export/import a date range between machines
+src/backup.js                 whole-machine backup/restore (config + every table)
 src/sources/                  iemre, rfcqpe, iemgauge, ksmesonet, weatherlink
 src/calibration.js            gauge-vs-grid bias (shared by CLI and dashboard)
 src/db.js                     SQLite schema

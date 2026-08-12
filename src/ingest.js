@@ -87,16 +87,21 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
   // Excluded stations are still fetched. They are only a handful of requests,
   // and it means turning one back on for a field restores its whole history
   // instead of leaving a hole from the day it was switched off.
+  const of = cfg.sources.weatherlink;
   const links = db.prepare(`SELECT field_id, network, station_id, dist_km FROM field_station
     WHERE network <> 'MANUAL' ORDER BY field_id, rank`).all()
     .filter(l => !only || only.has(l.field_id));
   const wanted = new Map();
   for (const l of links) wanted.set(`${l.network}|${l.station_id}`, l);
+  // A station switched off in the dashboard can still have links until the next
+  // remap. Fetching one would dereference a config section that is no longer
+  // there, so the link is ignored rather than the whole gauge pass failing.
+  if (!of?.enabled || !of.dailyUrl)
+    for (const k of [...wanted.keys()]) if (k.startsWith('ONFARM|')) wanted.delete(k);
 
   // On-farm monthly totals — the calibration series, and the only on-farm
   // history that survives a month roll.
-  const of = cfg.sources.weatherlink;
-  if (of?.enabled) {
+  if (of?.enabled && of.yearlyUrl) {
     try {
       const months = await fetchOnFarmMonthly(of.yearlyUrl);
       for (const m of months) if (m.precip_in !== null)

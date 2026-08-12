@@ -10,12 +10,15 @@ import {
   readConfig, writeConfig, autoDetectRegion,
   addField, updateField, removeField, setExclusions, farmsOf,
   manualGauges, upsertManualGauge, removeManualGauge,
+  onFarmStation, setOnFarmStation, removeOnFarmStation,
 } from './setup.js';
-import { linkManualGauges } from './stations.js';
+import { linkManualGauges, linkOnFarmStation } from './stations.js';
+import { probeStation } from './sources/weatherlink.js';
 import { deriveField } from './derive.js';
 import { buildExport, applyImport, rederiveAfterImport } from './sync.js';
+import { buildBackup, applyBackup, versionProblem, writeSafetyCopy } from './backup.js';
 import { createJobs } from './jobs.js';
-import { createUpdates } from './update.js';
+import { createUpdates, headCommit } from './update.js';
 
 let cfg = loadConfig();
 const db = openDb();
@@ -136,17 +139,29 @@ const send = (res, code, type, body) => {
 };
 const json = (res, obj) => send(res, 200, 'application/json', JSON.stringify(obj));
 
-// An import bundle is a whole date range of observations, so it needs far more
-// headroom than a field edit. Overflow rejects with a message rather than
-// destroying the socket, which used to leave the request hanging with no reply.
+// An import bundle is a whole date range of observations, and a restore is a
+// whole database, so both need far more headroom than a field edit. Overflow
+// rejects with a message rather than destroying the socket, which used to leave
+// the request hanging with no reply.
+//
+// Buffers are concatenated rather than appended to a string: a multi-byte
+// character split across two chunks becomes two replacement characters if each
+// chunk is decoded on its own, and a backup carries whatever anyone typed into
+// a field or farm name.
 const readBody = (req, max = 1e6) => new Promise((resolve, reject) => {
-  let b = '', over = false;
+  const chunks = [];
+  let n = 0, over = false;
   req.on('data', c => {
     if (over) return;
-    b += c;
-    if (b.length > max) { over = true; reject(new Error(`body larger than ${Math.round(max / 1e6)} MB`)); req.destroy(); }
+    n += c.length;
+    if (n > max) { over = true; reject(new Error(`body larger than ${Math.round(max / 1e6)} MB`)); req.destroy(); return; }
+    chunks.push(c);
   });
-  req.on('end', () => { if (over) return; try { resolve(b ? JSON.parse(b) : {}); } catch { reject(new Error('invalid JSON body')); } });
+  req.on('end', () => {
+    if (over) return;
+    try { resolve(n ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); }
+    catch { reject(new Error('invalid JSON body')); }
+  });
   req.on('error', e => { if (!over) reject(e); });
 });
 
@@ -264,6 +279,45 @@ const server = createServer(async (req, res) => {
       return json(res, { ok: true, gauges: manualGauges(cfg), keptReadings: kept });
     }
 
+    // --- The station on your own ground (Davis / WeatherLink NOAA reports) ---
+    if (p === '/api/config/station') {
+      if (req.method === 'GET') return json(res, { station: onFarmStation(cfg) });
+      if (req.method !== 'POST' && req.method !== 'DELETE') return send(res, 405, 'text/plain', 'method not allowed');
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'station editing is restricted to localhost');
+      const body = await readBody(req);
+      const live = readConfig();
+      let saved = null;
+      try {
+        if (req.method === 'DELETE') removeOnFarmStation(live);
+        else saved = setOnFarmStation(live, body);
+      } catch (e) {
+        return send(res, 400, 'application/json', JSON.stringify({ error: e.message }));
+      }
+      writeConfig(live);
+      cfg = live;
+      // Pure arithmetic on coordinates already in config — no station
+      // catalogues to refetch, so this is not a rediscovery.
+      linkOnFarmStation(db, cfg);
+      for (const f of cfg.fields) deriveField(db, f.id, 'gauge');
+      let job = null;
+      if (saved) {
+        jobs.start('station', { note: saved.name });
+        job = `Reading ${saved.name}'s reports`;
+      }
+      const kept = db.prepare('SELECT COUNT(*) n FROM station_obs WHERE network = ?').get('ONFARM').n;
+      return json(res, { ok: true, station: onFarmStation(cfg), job, keptReadings: kept });
+    }
+
+    // Fetch both reports and say what is in them, storing nothing. Pointing
+    // these at the wrong file otherwise shows up months later as a series that
+    // never started.
+    if (p === '/api/config/station/test') {
+      if (req.method !== 'POST') return send(res, 405, 'text/plain', 'method not allowed');
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'testing is restricted to localhost');
+      const body = await readBody(req);
+      return json(res, await probeStation(body));
+    }
+
     if (p === '/api/readings') {
       if (req.method === 'GET') {
         const days = Math.min(Number(url.searchParams.get('days')) || 120, 5000);
@@ -336,6 +390,7 @@ const server = createServer(async (req, res) => {
         fields: cfg.fields.map(f => ({ ...f, stations: stations.filter(s => s.field_id === f.id) })),
         sources: SOURCES,
         gauges: manualGauges(cfg),
+        station: onFarmStation(cfg),
         farms: farmsOf(cfg.fields),
         seasonStart: seasonStart(), growingStart: growStart(),
         lastIngest: db.prepare('SELECT MAX(ts) t FROM ingest_log').get()?.t ?? null,
@@ -403,6 +458,60 @@ const server = createServer(async (req, res) => {
         .map(f => f.name);
       if (unmapped.length) jobs.start('discover', { note: `mapping gauges for ${unmapped.join(', ')}` });
       return json(res, { ok: true, ...result, derived, unmapped, needsDiscover: unmapped.length > 0 });
+    }
+
+    // --- Whole-machine backup and restore ---
+    // Distinct from the sync above: that merges a date range, this replaces
+    // everything. Localhost only — the file carries the entire config,
+    // including the station's address.
+    if (p === '/api/backup.json') {
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'backups are restricted to localhost');
+      const bundle = await buildBackup(db, cfg);
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Disposition': `attachment; filename="rainmonitor-backup_${today()}.json"`,
+      });
+      return res.end(JSON.stringify(bundle));
+    }
+
+    if (p === '/api/restore') {
+      if (req.method !== 'POST') return send(res, 405, 'text/plain', 'method not allowed');
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'restoring is restricted to localhost');
+      if (jobs.status().running)
+        return send(res, 409, 'application/json', JSON.stringify({
+          error: 'A rainfall pull is running. Let it finish, then restore.' }));
+
+      let bundle;
+      try {
+        // The browser posts the file's own text, so the whole database never
+        // has to be parsed and re-serialised on that side just to add a flag.
+        bundle = await readBody(req, 256e6);
+      } catch (e) {
+        return send(res, 400, 'application/json', JSON.stringify({ error: e.message }));
+      }
+      const problem = versionProblem(bundle, await headCommit());
+      if (problem && !url.searchParams.get('force'))
+        return send(res, 409, 'application/json', JSON.stringify({
+          error: `Restore stopped: ${problem}`, versionProblem: problem }));
+
+      let safety = null, counts;
+      try {
+        safety = await writeSafetyCopy(db, cfg);
+        counts = applyBackup(db, bundle);
+      } catch (e) {
+        return send(res, 400, 'application/json', JSON.stringify({ error: e.message, safetyCopy: safety }));
+      }
+      writeConfig(bundle.config);
+      cfg = readConfig();
+      // The restored config may put the dashboard on a different port, in which
+      // case the page waiting for the restart would wait forever. Say where it
+      // went instead of coming back silently somewhere else.
+      const to = cfg.server ?? {};
+      const moved = (to.port ?? 8787) !== port || (to.host ?? '127.0.0.1') !== host
+        ? { host: to.host ?? '127.0.0.1', port: to.port ?? 8787 } : null;
+      json(res, { ok: true, counts, safetyCopy: safety, forced: !!problem, versionProblem: problem, serverMoved: moved, restarting: true });
+      setTimeout(restart, 250);
+      return;
     }
 
     // Static files, path-traversal guarded.

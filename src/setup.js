@@ -30,9 +30,9 @@ export function slugify(name, taken = new Set()) {
   return id;
 }
 
-export function validateField({ name, lat, lon, acres, farm }) {
+/** Shared by everything that carries a position: fields, gauges, the station. */
+export function validateCoords(lat, lon) {
   const errors = [];
-  if (!name || !String(name).trim()) errors.push('name is required');
   const la = Number(lat), lo = Number(lon);
   if (!Number.isFinite(la) || la < -90 || la > 90) errors.push('lat must be between -90 and 90');
   if (!Number.isFinite(lo) || lo < -180 || lo > 180) errors.push('lon must be between -180 and 180');
@@ -40,6 +40,13 @@ export function validateField({ name, lat, lon, acres, farm }) {
   // the field in Asia, where every source silently returns nothing.
   if (Number.isFinite(lo) && lo > 0 && Number.isFinite(la) && la > 20 && la < 72)
     errors.push('lon looks positive — western-hemisphere longitudes must be negative (e.g. -101.05)');
+  return errors;
+}
+
+export function validateField({ name, lat, lon, acres, farm }) {
+  const errors = [];
+  if (!name || !String(name).trim()) errors.push('name is required');
+  errors.push(...validateCoords(lat, lon));
   if (acres !== undefined && acres !== null && acres !== '' && !(Number(acres) > 0))
     errors.push('acres must be a positive number if given');
   if (farm !== undefined && farm !== null && String(farm).length > 60)
@@ -225,6 +232,96 @@ export function removeManualGauge(cfg, id) {
   const i = sec.gauges.findIndex(g => g.id === id);
   if (i < 0) throw new Error(`no manual gauge with id "${id}"`);
   return sec.gauges.splice(i, 1)[0];
+}
+
+/* ---------- the station on your own ground ---------- */
+
+/**
+ * A Davis (or anything else) publishing WeatherLink's NOAA-format reports.
+ *
+ * There is one of these, not a list: it is the station ON the farm, it is what
+ * `npm run calibrate` measures the radar against, and a second one would raise
+ * "which is the reference" — a question with no good answer and no UI worth
+ * building for it. Any further gauges you own are manual gauges.
+ */
+export const WEATHERLINK_DEFAULTS = {
+  enabled: false,
+  label: 'On-farm weather station',
+  stationId: 'MYSTATION',
+  name: 'My Farm Station',
+  lat: null, lon: null, elev_ft: null,
+  dailyUrl: '', yearlyUrl: '',
+  maxDistanceKm: 30,
+};
+
+/** The station that is switched on, or null when there is not one. */
+export function onFarmStation(cfg) {
+  const of = cfg.sources?.weatherlink;
+  return of?.enabled ? of : null;
+}
+
+const blank = v => v === '' || v === undefined || v === null;
+
+function httpUrl(errors, v, label, required = false) {
+  const s = String(v ?? '').trim();
+  if (!s) { if (required) errors.push(`${label} is required`); return ''; }
+  let u;
+  try { u = new URL(s); } catch { errors.push(`${label} is not a valid address`); return ''; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') errors.push(`${label} must start with http:// or https://`);
+  return s;
+}
+
+/**
+ * Add or edit the on-farm station.
+ *
+ * `stationId` is deliberately not something the form can change. It is what
+ * every stored reading and every per-field exclusion is filed under, so letting
+ * it move on a rename would orphan a year of history behind an id nothing
+ * refers to any more. It is derived once, from the name given the first time.
+ */
+export function setOnFarmStation(cfg, { name, lat, lon, elev_ft, dailyUrl, yearlyUrl, maxDistanceKm }) {
+  const errors = [];
+  if (!name || !String(name).trim()) errors.push('station name is required');
+  errors.push(...validateCoords(lat, lon));
+  const daily = httpUrl(errors, dailyUrl, 'the daily report address (NOAAMO.txt)', true);
+  const yearly = httpUrl(errors, yearlyUrl, 'the yearly report address (NOAAYR.txt)');
+  if (!blank(elev_ft) && !Number.isFinite(Number(elev_ft))) errors.push('elevation must be a number of feet if given');
+  if (!blank(maxDistanceKm) && !(Number(maxDistanceKm) > 0)) errors.push('range must be a positive number of km if given');
+  if (errors.length) throw new Error(errors.join('; '));
+
+  if (!cfg.sources) cfg.sources = {};
+  const prev = cfg.sources.weatherlink ?? {};
+  // A station that was never switched on carries the example's placeholder id,
+  // which must not be inherited as though it meant something.
+  const keepId = prev.enabled && prev.stationId ? prev.stationId : null;
+  const next = {
+    ...WEATHERLINK_DEFAULTS, ...prev,
+    enabled: true,
+    stationId: keepId ?? stationIdFor(name),
+    name: String(name).trim(),
+    lat: Number(lat), lon: Number(lon),
+    elev_ft: blank(elev_ft) ? null : Number(elev_ft),
+    dailyUrl: daily,
+    yearlyUrl: yearly,
+    maxDistanceKm: blank(maxDistanceKm) ? (prev.maxDistanceKm ?? WEATHERLINK_DEFAULTS.maxDistanceKm) : Number(maxDistanceKm),
+  };
+  cfg.sources.weatherlink = next;
+  return next;
+}
+
+const stationIdFor = name => slugify(name).replace(/-/g, '_').toUpperCase().slice(0, 24) || 'ONFARM';
+
+/**
+ * Switch the station off. Its readings stay in the database, so putting the
+ * same station back later picks the history up again rather than starting over
+ * — which matters more here than anywhere else, because NOAAMO.txt is
+ * overwritten monthly and what is stored is the only copy that exists.
+ */
+export function removeOnFarmStation(cfg) {
+  const of = cfg.sources?.weatherlink;
+  if (!of?.enabled) throw new Error('no on-farm station is set up');
+  of.enabled = false;
+  return of;
 }
 
 /**

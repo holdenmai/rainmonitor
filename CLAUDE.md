@@ -26,6 +26,8 @@ npm run backfill 400    # pull N days of history
 npm run check [field]   # date-alignment diagnostic: cross-correlate vs MRMS at lags -2..+2
 npm run calibrate       # on-farm gauge vs MRMS/PRISM, split warm/cold season
 npm run fields | add-field | update-field | remove-field | export | import
+npm run backup          # config.json + every table, one file
+npm run restore -- --file f.json   # REPLACES everything; same commit required
 ```
 
 `Setup.cmd` (Windows, double-click) runs `scripts/setup.ps1`: Node version gate,
@@ -78,6 +80,23 @@ most feeds never need refetching to correct a number.
 Never export, import or trust a derived row from elsewhere: `src/sync.js` ships
 raw rows only and calls `rederiveAfterImport()`, because the receiving machine
 may rank or exclude gauges differently.
+
+### Two transfer paths, and they must not be conflated
+
+- `src/sync.js` — **merge** a date range between machines that are both
+  collecting. Raw rows only, never destructive, re-derives on arrival.
+- `src/backup.js` — **replace** everything: `config.json` plus every table, for
+  standing a new machine up as a copy of another. Derived rows travel too,
+  because the whole config travels with them, so the answer to "which gauge
+  counts here" is the same one.
+
+A backup writes rows straight back into the tables they came from, so source and
+target must be on the **same commit** (`headCommit()` in `src/update.js`, checked
+by `versionProblem()`). Column names are re-checked against `PRAGMA table_info`
+even so, because `--force` exists for zip installs with no version to compare.
+`writeSafetyCopy()` dumps the current state to `data/backups/` before anything is
+overwritten. When a restored `config.json` moves `server.port`, the response says
+so — otherwise the page waiting on the restart waits forever.
 
 ### Exclusions live in two places on purpose
 
@@ -161,5 +180,16 @@ framework and no bundler — it is served as-is.
   codebase is dense with load-bearing rationale about upstream behaviour and
   farm-office constraints. Match that: when fixing something subtle, leave the
   reason behind, not just the fix.
+- **Linking a station you own is arithmetic, not discovery.** `discoverStations()`
+  downloads three catalogues and rewrites every link; `linkManualGauges()` and
+  `linkOnFarmStation()` touch one network each using coordinates already in
+  `config.json`, so adding a gauge or a weather station from the dashboard cannot
+  be blocked by a timeout. Both also handle the *unlinking* case — an empty list
+  clears that network's rows — so removing one takes effect without a rediscovery.
+- **There is one on-farm station, not a list** (`sources.weatherlink`). It is the
+  reference `src/calibration.js` measures the grid against, and a second one
+  would raise "which is the reference". Its `stationId` is derived once from the
+  name and never changes on a rename: it is what every `station_obs` row and
+  every `exclude.stations` entry is filed under.
 - Sources stay separate rows in `obs`; **the disagreement between them is the
   product**. Do not add anything that averages them into one number.

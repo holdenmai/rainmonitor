@@ -40,6 +40,14 @@ export function createJobs(db, getCfg) {
         return ingest(db, cfg, { sdate: addDays(today(), -days), log, onlyFields: opts.fields });
       },
     },
+    // A newly added on-farm station. Linking it to fields is instant, but its
+    // reports still have to be read. Back to the first of the month, because
+    // NOAAMO.txt carries the whole current month and is overwritten at month
+    // roll — this is the one chance to capture all of it.
+    station: {
+      label: 'Reading the weather station',
+      run: async (log) => ingest(db, getCfg(), { sdate: `${today().slice(0, 7)}-01`, log }),
+    },
     // What adding or moving a field used to require two npm commands for.
     newfield: {
       label: 'Setting up the new field',

@@ -4,6 +4,8 @@ import { today, addDays } from './util.js';
 import { discoverStations, linkManualGauges } from './stations.js';
 import { ingest } from './ingest.js';
 import { buildExport, applyImport, rederiveAfterImport } from './sync.js';
+import { buildBackup, applyBackup, backupCounts, versionProblem, writeSafetyCopy } from './backup.js';
+import { headCommit } from './update.js';
 import {
   ensureConfig, readConfig, writeConfig, autoDetectRegion,
   addField, updateField, removeField, CONFIG_PATH,
@@ -38,6 +40,12 @@ const usage = () => console.log(`rainmonitor
 
   npm run export -- --days 14 [--from D] [--to D] [--sources rfcqpe] [--out file.json]
   npm run import -- --file file.json [--create-fields]
+
+  npm run backup -- [--out file.json]        everything: config + the whole database
+  npm run restore -- --file file.json        REPLACES everything on this machine
+
+Export/import merges a date range between machines that are both collecting.
+Backup/restore copies one machine onto another, and needs both on the same version.
 
 Fields are easiest to manage from the dashboard: npm run serve, then "Fields".`);
 
@@ -139,6 +147,47 @@ async function main() {
         if (r.unknownFields.length)
           console.log(`  skipped data for fields this machine does not have: ${r.unknownFields.join(', ')}`
             + ' (re-run with --create-fields to add them)');
+      }
+    } catch (e) {
+      console.error(`Error: ${e.message}`);
+      process.exitCode = 1;
+    } finally {
+      db.close();
+    }
+    return;
+  }
+
+  // Backup/restore is the whole machine, not a date range: config, settings and
+  // every table. For setting a second computer up as a copy of this one, or
+  // moving to a new one. Source and target must be on the same commit, because
+  // a restore writes rows straight back into the tables they came from.
+  if (cmd === 'backup' || cmd === 'restore') {
+    const a = flags(rest);
+    const db = openDb();
+    try {
+      if (cmd === 'backup') {
+        const bundle = await buildBackup(db, cfg);
+        const out = a.out ?? `rainmonitor-backup_${today()}.json`;
+        writeFileSync(out, JSON.stringify(bundle));
+        const c = backupCounts(bundle);
+        console.log(`Wrote ${out}: ${c.field} fields, ${c.obs} observations, ${c.station_obs} station readings, `
+          + 'and config.json.');
+        console.log(bundle.commit
+          ? `  version ${bundle.commit.sha.slice(0, 7)} (${bundle.commit.date}) — restoring needs a copy on the same version.`
+          : '  this copy was not installed with git, so the backup records no version.');
+      } else {
+        if (!a.file) throw new Error('need --file <backup.json>');
+        const bundle = JSON.parse(readFileSync(a.file, 'utf8'));
+        const problem = versionProblem(bundle, await headCommit());
+        if (problem && a.force !== 'true') throw new Error(`${problem}\n  Pass --force to restore anyway.`);
+        if (problem) console.log(`  WARNING: ${problem}`);
+        const safety = await writeSafetyCopy(db, cfg);
+        console.log(`  saved what is on this machine now to ${safety}`);
+        const counts = applyBackup(db, bundle);
+        writeConfig(bundle.config);
+        console.log(`Restored ${a.file}: ${counts.field} fields, ${counts.obs} observations, `
+          + `${counts.station_obs} station readings, and config.json.`);
+        console.log('  Restart the dashboard to pick it up.');
       }
     } catch (e) {
       console.error(`Error: ${e.message}`);

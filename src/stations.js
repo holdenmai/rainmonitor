@@ -31,6 +31,43 @@ export function linkManualGauges(db, cfg, log = () => {}) {
   }
 }
 
+/** The one-station "pool" an on-farm station forms, or null if it is unusable. */
+export function onFarmStationRow(of) {
+  if (!of?.enabled || !Number.isFinite(of.lat) || !Number.isFinite(of.lon)) return null;
+  return {
+    id: of.stationId, network: 'ONFARM', name: of.name, lat: of.lat, lon: of.lon,
+    elev_m: Number.isFinite(Number(of.elev_ft)) ? Math.round(Number(of.elev_ft) * 0.3048) : null,
+  };
+}
+
+/**
+ * Map the on-farm station to fields by distance.
+ *
+ * Split out of `discoverStations` for the same reason `linkManualGauges` is:
+ * the station's position is already in config.json, so which fields it reaches
+ * is arithmetic. Adding one from the dashboard should not wait on three station
+ * catalogues downloading, and should not fail because one of them timed out.
+ */
+export function linkOnFarmStation(db, cfg, log = () => {}) {
+  const of = cfg.sources?.weatherlink;
+  const row = onFarmStationRow(of);
+  if (row) upsertStation(db, row);
+
+  for (const f of cfg.fields) {
+    const excluded = new Set(f.exclude?.stations ?? []);
+    const links = [];
+    if (row) {
+      const dist_km = haversineKm(f.lat, f.lon, row.lat, row.lon);
+      if (dist_km <= (of.maxDistanceKm ?? 30))
+        links.push({ station_id: row.id, dist_km, excluded: excluded.has(`ONFARM|${row.id}`) ? 1 : 0 });
+    }
+    // Also the path that unlinks it: an empty list clears the ONFARM rows, so
+    // switching the station off stops it counting without a rediscovery.
+    setFieldStationsForNetwork(db, f.id, 'ONFARM', links);
+    if (links.length) log(`  ${f.name}: on-farm station @ ${links[0].dist_km.toFixed(1)} km`);
+  }
+}
+
 /**
  * Build the field -> nearby-gauge mapping. Run this once, and again whenever
  * you edit the field list in config.json.
@@ -60,14 +97,11 @@ export async function discoverStations(db, cfg, log = console.log) {
   // other gauge, so it naturally wins for nearby fields without special-casing.
   const of = cfg.sources.weatherlink;
   if (of?.enabled) {
-    if (!Number.isFinite(of.lat) || !Number.isFinite(of.lon)) {
-      log('  ONFARM: enabled but lat/lon are unset in config.json — skipped');
+    const row = onFarmStationRow(of);
+    if (!row) {
+      log('  ONFARM: enabled but lat/lon are unset — set them in the dashboard, under "Your own weather station"');
     } else {
-      pools.push({
-        kind: 'weatherlink', network: 'ONFARM', cfg: { ...of, maxStations: 1 },
-        stations: [{ id: of.stationId, network: 'ONFARM', name: of.name, lat: of.lat, lon: of.lon,
-                     elev_m: of.elev_ft ? Math.round(of.elev_ft * 0.3048) : null }],
-      });
+      pools.push({ kind: 'weatherlink', network: 'ONFARM', cfg: { ...of, maxStations: 1 }, stations: [row] });
       log(`  ONFARM: 1 station (${of.name})`);
     }
   }

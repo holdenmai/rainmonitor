@@ -30,6 +30,25 @@ const parseCommits = out => out.split('\n').filter(Boolean).map(line => {
   return { sha, date, subject };
 });
 
+/**
+ * The exact commit this copy is running, or null if it did not come from git.
+ *
+ * The full sha rather than the short one: this is what a restore compares
+ * against to decide whether a backup's database rows mean the same thing here
+ * as they did on the machine that wrote them.
+ */
+export async function headCommit() {
+  try {
+    const [sha, date, subject] = (await git(['log', '-1', '--format=%H%x1f%ad%x1f%s', '--date=short'], 5000)).split('\x1f');
+    if (!sha) return null;
+    let branch = null;
+    try { branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], 5000); } catch { /* detached, or no HEAD yet */ }
+    return { sha, date, subject, branch };
+  } catch {
+    return null;
+  }
+}
+
 /** What kind of installation is this, and can it be updated at all? */
 export async function repoInfo() {
   try {

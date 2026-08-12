@@ -293,6 +293,77 @@ function refreshFieldSelect(prefer) {
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/* ---------- pasting a coordinate pair ---------- */
+
+/** One half of a pair: decimal, or degrees/minutes/seconds, with or without a
+ *  hemisphere letter. Returns the signed value and which axis the letter names. */
+function oneCoord(part) {
+  const s = String(part).trim();
+  const hemi = (/([NSEW])\s*$/i.exec(s) ?? /^([NSEW])/i.exec(s))?.[1]?.toUpperCase() ?? null;
+  const nums = s.replace(/[NSEWnsew]/g, ' ').match(/\d+(?:\.\d+)?/g);
+  if (!nums || nums.length > 3) return null;
+  const [d, m = 0, sec = 0] = nums.map(Number);
+  const v = d + m / 60 + sec / 3600;
+  const neg = s.trimStart().startsWith('-') || hemi === 'S' || hemi === 'W';
+  return {
+    value: Math.round((neg ? -v : v) * 1e6) / 1e6,
+    axis: hemi === 'N' || hemi === 'S' ? 'lat' : hemi === 'E' || hemi === 'W' ? 'lon' : null,
+  };
+}
+
+/**
+ * "39.3861, -101.0523" -> both boxes.
+ *
+ * Everything that hands out coordinates gives them as a pair: a map, a GPS, the
+ * header of a NOAA report. Both boxes are type="number", so a paste containing
+ * a comma is discarded without a word — you get an empty box and no idea why.
+ * Splitting the pair here is the difference between one paste and hand-copying
+ * two halves of a number that must not be mistyped.
+ *
+ * Returns null for anything that is not a pair, so pasting a single number
+ * still behaves like an ordinary paste.
+ */
+function parseLatLon(text) {
+  const t = String(text ?? '').trim();
+  if (!t) return null;
+  // Where the halves divide, most reliable first. A comma settles it; failing
+  // that a hemisphere letter marks the seam, which is what keeps
+  // `39° 23' 10" N 101° 03' 08" W` from being chopped at its first space.
+  const splits = t.includes(',') ? [t.split(',')] : [
+    (/^(.*?[NS])\s+(.*[EW])$/i.exec(t) ?? []).slice(1),
+    (/^([NS].*?)\s+([EW].*)$/i.exec(t) ?? []).slice(1),
+    t.split(/\s+/),
+  ];
+  for (const parts of splits) {
+    if (parts.length !== 2) continue;
+    const a = oneCoord(parts[0]), b = oneCoord(parts[1]);
+    if (!a || !b) continue;
+    let [lat, lon] = [a, b];
+    // A hemisphere letter settles the order outright. Failing that, a first
+    // value past 90 can only be a longitude.
+    if (a.axis === 'lon' || b.axis === 'lat') [lat, lon] = [b, a];
+    else if (!a.axis && !b.axis && Math.abs(a.value) > 90 && Math.abs(b.value) <= 90) [lat, lon] = [b, a];
+    if (Math.abs(lat.value) > 90 || Math.abs(lon.value) > 180) continue;
+    return { lat: lat.value, lon: lon.value };
+  }
+  return null;
+}
+
+function wireCoordPaste(form) {
+  // form.elements[...] rather than form[...]: a control called "name" or
+  // "submit" shadows the form's own property of that name, and reaching for the
+  // inputs one consistent way is cheaper than remembering which ones collide.
+  const lat = form?.elements?.lat, lon = form?.elements?.lon;
+  if (!lat || !lon) return;
+  for (const box of [lat, lon]) box.addEventListener('paste', e => {
+    const pair = parseLatLon(e.clipboardData?.getData('text') ?? '');
+    if (!pair) return;                    // a single number pastes as it always did
+    e.preventDefault();
+    lat.value = pair.lat;
+    lon.value = pair.lon;
+  });
+}
+
 async function load() {
   const fieldId = $('fieldSel').value;
   const days = Number($('rangeSel').value);
@@ -405,6 +476,7 @@ async function load() {
 
   renderExclusions(field);
   renderFields();
+  renderStation();
 
   $('csvBtn').href = `/api/export.csv?field=${fieldId}&days=${Math.max(days, 400)}`;
   $('subtitle').textContent = [
@@ -420,6 +492,9 @@ let updateInfo = null, updateListOpen = false;
 
 function renderUpdate() {
   const u = updateInfo;
+  // Which version this copy is on is also what decides whether a backup from
+  // another machine can be restored here, so that panel follows this one.
+  renderBackup();
   if (!u) return;
   const banner = $('updateBanner');
   const repo = u.repo ?? {};
@@ -667,6 +742,168 @@ function wireExport() {
     await renderGauges();
     await load();
   });
+}
+
+/* ---------- full backup & restore ---------- */
+const restoreMsg = (t, bad) => note('restoreMsg', t, bad);
+
+/** Which version this copy is, so two machines can be compared before trying. */
+function renderBackup() {
+  const cur = updateInfo?.repo?.current;
+  $('backupStatus').innerHTML = cur
+    ? `<span class="none">This copy is version ${esc(cur.sha)} (${esc(cur.date)}). A backup restores only onto a copy `
+      + 'on the same version — the file writes straight into the database tables, and only a matching version '
+      + 'guarantees they still mean the same thing.</span>'
+    : '<span class="none">This copy was not installed with git, so its version cannot be read. Restoring will need '
+      + 'the override box below ticked.</span>';
+}
+
+function wireBackup() {
+  $('restoreForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const file = $('restoreForm').file.files[0];
+    if (!file) return restoreMsg('Choose a backup file first.', true);
+    if (!confirm(`Replace EVERYTHING on this machine with ${file.name}?\n\n`
+      + 'Every field, setting and rainfall record here is overwritten. A copy of what is here now is saved to '
+      + 'data/backups first, so this can be undone.')) return;
+
+    restoreMsg(`Reading ${file.name}…`);
+    // The file's own text goes up as the body: a full database does not need
+    // parsing and re-serialising on this side just to attach a flag.
+    let body;
+    try { body = await file.text(); } catch { return restoreMsg(`Could not read ${file.name}.`, true); }
+
+    restoreMsg('Restoring…');
+    const force = $('restoreForm').force.checked;
+    const res = await fetch(`/api/restore${force ? '?force=1' : ''}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    }).catch(() => null);
+    if (!res) return restoreMsg('The dashboard did not answer. Nothing was changed.', true);
+    const r = await res.json().catch(() => ({}));
+    if (!res.ok) return restoreMsg(r.error || `Restore failed (${res.status})`, true);
+
+    const n = r.counts ?? {};
+    const done = `Restored ${n.field ?? 0} field(s), ${n.obs ?? 0} observations and `
+      + `${n.station_obs ?? 0} station readings, plus config.json. What was here is saved in ${r.safetyCopy}.`;
+    if (r.serverMoved) {
+      return restoreMsg(`${done} The restored settings move the dashboard to `
+        + `http://${r.serverMoved.host}:${r.serverMoved.port} — open that address in a moment.`, true);
+    }
+    restoreMsg(`${done} Restarting…`);
+    if (await waitForRestart()) location.reload();
+    else restoreMsg(`${done} The dashboard has not come back yet — give it a moment and refresh this page.`, true);
+  });
+}
+
+/* ---------- the station on your own ground ---------- */
+const stationMsg = (t, bad) => note('stationMsg', t, bad);
+
+/**
+ * `fill` refills the form from the saved station, which only the paths that
+ * changed it should do. The status line refreshes far more often than that —
+ * every time a field moves — and rewriting the boxes underneath somebody
+ * halfway through typing a URL would be its own small disaster.
+ */
+function renderStation({ fill = false } = {}) {
+  const s = META.station ?? null;
+  const f = $('stationForm').elements;
+  $('stationSave').textContent = s ? 'Save changes' : 'Add station';
+  $('stationRemove').hidden = !s;
+
+  if (fill) for (const [k, v] of Object.entries({
+    name: s?.name, lat: s?.lat, lon: s?.lon, elev_ft: s?.elev_ft,
+    maxDistanceKm: s?.maxDistanceKm, dailyUrl: s?.dailyUrl, yearlyUrl: s?.yearlyUrl,
+  })) f[k].value = v ?? '';
+
+  // Which fields it reaches comes from the links the server computed, so this
+  // panel cannot disagree with what the charts are actually using.
+  const covers = META.fields
+    .filter(x => (x.stations ?? []).some(st => st.network === 'ONFARM' && !st.excluded))
+    .map(x => x.name);
+  $('stationStatus').innerHTML = !s
+    ? '<span class="none">No station set up. If you have one, this becomes the closest thing to ground truth you '
+      + 'have — and the gauge the radar gets calibrated against.</span>'
+    : `<span>${esc(s.name)} <span class="none">(${esc(s.stationId)})</span> at ${Number(s.lat).toFixed(4)}, `
+      + `${Number(s.lon).toFixed(4)} — ${covers.length ? `counts for ${esc(covers.join(', '))}`
+        : `<span class="warn">no field within ${s.maxDistanceKm ?? 30} km</span>`}.</span>`;
+}
+
+function wireStation() {
+  $('stationTest').addEventListener('click', async () => {
+    const f = $('stationForm').elements;
+    const dailyUrl = f.dailyUrl.value.trim(), yearlyUrl = f.yearlyUrl.value.trim();
+    if (!dailyUrl && !yearlyUrl) return stationMsg('Fill in the daily report address first.', true);
+    stationMsg('Fetching the reports…');
+    const r = await fetch('/api/config/station/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dailyUrl, yearlyUrl }),
+    }).then(res => res.json()).catch(() => null);
+    if (!r) return stationMsg('Could not reach the dashboard.', true);
+
+    const bits = [];
+    let bad = false;
+    if (r.daily) {
+      bad = bad || !r.daily.ok;
+      bits.push(r.daily.ok
+        ? `Daily report: ${r.daily.days} day${r.daily.days === 1 ? '' : 's'} for ${r.daily.period}, `
+          + `${(r.daily.total ?? 0).toFixed(2)}" so far.`
+        : `Daily report failed — ${r.daily.error}.`);
+    }
+    if (r.yearly) {
+      bad = bad || !r.yearly.ok;
+      bits.push(r.yearly.ok
+        ? `Yearly report: ${r.yearly.months} month${r.yearly.months === 1 ? '' : 's'} `
+          + `(${r.yearly.firstMonth} to ${r.yearly.lastMonth}), ${(r.yearly.total ?? 0).toFixed(2)}" total.`
+        : `Yearly report failed — ${r.yearly.error}.`);
+    }
+
+    // The header carries the station's own position, in degrees/minutes/
+    // seconds. Filling only the empty boxes: this is an offer, not a correction
+    // of something already typed.
+    const h = r.daily?.station;
+    const filled = [];
+    if (h) for (const [k, v] of [['name', h.name], ['lat', h.lat], ['lon', h.lon], ['elev_ft', h.elev_ft]]) {
+      if (v === null || v === undefined || v === '' || f[k].value) continue;
+      f[k].value = v;
+      filled.push(k === 'elev_ft' ? 'elevation' : k);
+    }
+    if (filled.length) bits.push(`Filled in ${filled.join(', ')} from the report header.`);
+    stationMsg(bits.join(' '), bad);
+  });
+
+  $('stationForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    stationMsg('Saving…');
+    const res = await fetch('/api/config/station', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.fromEntries(new FormData(e.target))),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return stationMsg(body.error || `Failed (${res.status})`, true);
+    META = await fetch('/api/fields').then(r => r.json());
+    renderStation({ fill: true });
+    if (body.job) { jobWasRunning = true; clearTimeout(jobTimer); pollJobs(); }
+    await load();
+    stationMsg(`Saved ${body.station.name}.`
+      + (body.job ? ` ${body.job} now — see Data collection above.` : '')
+      + (body.keptReadings ? ` ${body.keptReadings} reading(s) already stored for it.` : ''));
+  });
+
+  $('stationRemove').addEventListener('click', async () => {
+    if (!confirm('Remove the weather station? Its readings are kept, so adding the same station back restores them '
+      + '— which matters here, because its monthly report is overwritten and this is the only copy.')) return;
+    stationMsg('Removing…');
+    const res = await fetch('/api/config/station', { method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return stationMsg(body.error || `Failed (${res.status})`, true);
+    META = await fetch('/api/fields').then(r => r.json());
+    renderStation({ fill: true });
+    await load();
+    stationMsg(`Removed. ${body.keptReadings} reading(s) kept in the database.`);
+  });
+
+  renderStation({ fill: true });
 }
 
 /* ---------- manual gauges ---------- */
@@ -926,7 +1163,10 @@ function renderFields() {
     }
   });
   $('readingGauge').addEventListener('change', renderReadings);
+  for (const f of ['addField', 'addGauge', 'stationForm']) wireCoordPaste($(f));
   wireExport();
+  wireBackup();
+  wireStation();
   wireJobs();
   wireUpdates();
   const now = new Date();
