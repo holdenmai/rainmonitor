@@ -368,7 +368,7 @@ async function load() {
   $('fieldsNote').textContent = `Radar QPE totals since ${META.seasonStart}. Selected field highlighted.${scope}`;
   drawFields($('chartFields'), summaries.filter(s => shown.some(f => f.id === s.field_id)), META.fields, fieldId);
 
-  // Calibration: how the gridded products compare to the gauge on Home 8.
+  // Calibration: how the gridded products compare to the on-farm gauge.
   if (cal && cal.months?.length) {
     $('calCard').hidden = false;
     $('calNote').textContent =

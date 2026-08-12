@@ -5,10 +5,10 @@ import { fetchWithRetry, cleanPrecipIn } from '../util.js';
  * NOAA's own precipitation viewer (and, rebranded, iWeatherNet's rainfall map).
  *
  * WHY IT IS HERE: ~4 km grid, versus the ~12 km IEMRE feed — three times finer,
- * and it needs no GRIB toolchain, just JSON over HTTP. That resolution matters
- * for these fields specifically: Celia, Canyon and Martinek sit within ~6 km of
- * each other, and High Plains summer convection routinely hits one and misses
- * the next.
+ * and it needs no GRIB toolchain, just JSON over HTTP. That resolution is the
+ * whole reason it is worth the extra requests: fields on one operation often sit
+ * within a few km of each other, and summer convection routinely hits one
+ * quarter section and misses the next.
  *
  * NOT square-mile. The service states "approximate 4km x 4km grid cell scale",
  * and its own native pixel size (5370 m in Web Mercator) works out to 4187 m of

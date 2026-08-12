@@ -1,7 +1,7 @@
 /**
  * Radar calibration against the on-farm gauge:  node scripts/calibrate.mjs
  *
- * Compares the Davis Vantage Pro on Home 8 against MRMS and PRISM sampled at the
+ * Compares the configured on-farm station against MRMS and PRISM sampled at the
  * nearest field point, month by month. Shares its logic with the dashboard's
  * /api/calibration endpoint so the two can never disagree.
  */
