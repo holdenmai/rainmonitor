@@ -510,13 +510,22 @@ function renderUpdate() {
     $('updateApply').disabled = !!u.edits?.length;
   }
 
+  // The same button as in the banner. "Check now" is at the bottom of the page
+  // and the banner is at the top, so checking from here used to answer "yes,
+  // there is one" a full screen away from anything that would apply it.
+  $('updateApplyHere').hidden = !u.available;
+  $('updateApplyHere').disabled = !!u.edits?.length;
+
   const checked = u.lastCheckedAt ? `checked ${ago(u.lastCheckedAt)}` : 'not checked yet';
   $('updateStatus').innerHTML =
     !u.enabled ? '<span class="none">Update checking is switched off in config.json.</span>'
     : u.checking ? '<span class="spinner"></span><span>Checking for updates…</span>'
     : repo.updatable === false ? `<span class="none">${esc(repo.reason)}</span>`
     : u.error ? `<span class="none">Could not check for updates (${esc(u.error)}) — will try again later. This copy is ${esc(cur)}.</span>`
-    : u.available ? `<span>${u.behind} update${u.behind === 1 ? '' : 's'} available. This copy is ${esc(cur)}, ${esc(checked)}.</span>`
+    : u.available ? `<span>${u.behind} update${u.behind === 1 ? '' : 's'} available. This copy is ${esc(cur)}, ${esc(checked)}.`
+      + (u.edits?.length
+        ? ` <span class="warn">Blocked: this copy has local edits to ${esc(u.edits.slice(0, 3).join(', '))}.</span>`
+        : '') + '</span>'
     : `<span class="none">Up to date — this copy is ${esc(cur)}, ${esc(checked)}.</span>`;
 
   const show = updateListOpen && u.commits?.length;
@@ -552,30 +561,35 @@ async function waitForRestart(deadlineMs = 90_000) {
   return false;
 }
 
+/** Shared by the banner at the top and the button in the panel at the bottom. */
+async function applyUpdate() {
+  if (!confirm('Download the update and restart the dashboard? It will be back in a few seconds.')) return;
+  for (const id of ['updateApply', 'updateApplyHere']) $(id).disabled = true;
+  $('updateBannerTitle').textContent = 'Updating…';
+  $('updateBannerNote').textContent = 'Downloading the new version and restarting. This page will reload on its own.';
+  $('updateStatus').innerHTML = '<span class="spinner"></span><span>Updating and restarting…</span>';
+  const r = await fetch('/api/update', { method: 'POST' }).then(res => res.json()).catch(() => ({ error: 'no reply' }));
+  if (r.error) {
+    $('updateBannerTitle').textContent = 'Update stopped';
+    $('updateBannerNote').textContent = r.error;
+    $('updateStatus').innerHTML = `<span class="warn">${esc(r.error)}</span>`;
+    for (const id of ['updateApply', 'updateApplyHere']) $(id).disabled = false;
+    return;
+  }
+  if (!r.restarting) { await loadUpdate(); return; }
+  if (await waitForRestart()) location.reload();
+  else {
+    $('updateBannerTitle').textContent = 'Updated, but the dashboard has not come back yet';
+    $('updateBannerNote').textContent = 'Give it a moment and refresh this page. If it stays down, restart the computer.';
+  }
+}
+
 function wireUpdates() {
   $('updateCheck').addEventListener('click', () => loadUpdate(true));
   $('updateDetails').addEventListener('click', () => { updateListOpen = !updateListOpen; renderUpdate();
     if (updateListOpen) $('updateCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
 
-  $('updateApply').addEventListener('click', async () => {
-    if (!confirm('Download the update and restart the dashboard? It will be back in a few seconds.')) return;
-    $('updateApply').disabled = true;
-    $('updateBannerTitle').textContent = 'Updating…';
-    $('updateBannerNote').textContent = 'Downloading the new version and restarting. This page will reload on its own.';
-    const r = await fetch('/api/update', { method: 'POST' }).then(r => r.json()).catch(() => ({ error: 'no reply' }));
-    if (r.error) {
-      $('updateBannerTitle').textContent = 'Update stopped';
-      $('updateBannerNote').textContent = r.error;
-      $('updateApply').disabled = false;
-      return;
-    }
-    if (!r.restarting) { await loadUpdate(); return; }
-    if (await waitForRestart()) location.reload();
-    else {
-      $('updateBannerTitle').textContent = 'Updated, but the dashboard has not come back yet';
-      $('updateBannerNote').textContent = 'Give it a moment and refresh this page. If it stays down, restart the computer.';
-    }
-  });
+  for (const id of ['updateApply', 'updateApplyHere']) $(id).addEventListener('click', applyUpdate);
 
   loadUpdate();
 }
@@ -1016,14 +1030,19 @@ async function saveExclusions(fieldId, patch) {
   if (!res.ok) { exMsg(body.error || `Failed (${res.status})`, true); return null; }
   META = await fetch('/api/fields').then(r => r.json());
   await load();
-  if (body.job) { jobWasRunning = true; clearTimeout(jobTimer); pollJobs(); }
   return body;
 }
 
 function renderExclusions(field) {
   if (!field) return;
   const exSrc = new Set(field.exclude?.sources ?? []);
-  const exSta = new Set(field.exclude?.stations ?? []);
+  const rows = field.stations ?? [];
+  // The ticks come from the links, not from config.exclude.stations. A field
+  // nobody has touched counts its nearest couple and lists the rest unticked
+  // without that being written down anywhere, so reading config here would
+  // draw every box ticked and disagree with the numbers on the charts. The
+  // first change writes the whole state out, and config leads from then on.
+  const exSta = new Set(rows.filter(s => s.excluded).map(stationKey));
   $('exField').textContent = field.name;
 
   $('sourceToggles').innerHTML = SERIES.map(s => {
@@ -1041,7 +1060,6 @@ function renderExclusions(field) {
   const st = $('stationTable');
   st.querySelector('thead').innerHTML =
     '<tr><th>Counts</th><th>Station</th><th>Network</th><th>Distance</th></tr>';
-  const rows = field.stations ?? [];
   st.querySelector('tbody').innerHTML = rows.length ? rows.map(s => {
     const on = !exSta.has(stationKey(s));
     return `<tr><td><span class="tick"><input type="checkbox" data-sta="${esc(stationKey(s))}"${on ? ' checked' : ''}
@@ -1054,8 +1072,7 @@ function renderExclusions(field) {
     const next = new Set(exSta);
     if (box.checked) next.delete(box.dataset.sta); else next.add(box.dataset.sta);
     saveExclusions(field.id, { stations: [...next] }).then(r => {
-      if (r) exMsg(`${box.checked ? 'Counting' : 'Ignoring'} ${box.dataset.sta.split('|')[1]} for ${field.name}.`
-        + (r.job ? ` ${r.job}…` : ''));
+      if (r) exMsg(`${box.checked ? 'Counting' : 'Ignoring'} ${box.dataset.sta.split('|')[1]} for ${field.name}.`);
     });
   }));
 }

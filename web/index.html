@@ -109,7 +109,8 @@
 
   <section class="card">
     <div class="card-head"><div><h2>What counts for <span id="exField">this field</span></h2>
-      <p class="note">Untick a source or a gauge and it stops counting for this field, in the past as well as going forward. Nothing is deleted — tick it back on and the history returns. A gauge 30 miles away describes your home quarter far better than it describes the far end of the county.</p></div></div>
+      <p class="note">Untick a source or a gauge and it stops counting for this field, in the past as well as going forward. Nothing is deleted — tick it back on and the history returns.</p>
+      <p class="note" style="margin-top:6px">The list is the nearest six gauges, and the nearest two count to begin with. Unticking one does <em>not</em> promote another: a gauge half a mile away and one thirty miles away are measurements of different ground, and swapping one for the other would quietly change what this field's number means. The rest are listed so you can add one deliberately.</p></div></div>
     <div class="toggles" id="sourceToggles"></div>
     <div class="table-wrap"><table id="stationTable"><thead></thead><tbody></tbody></table></div>
     <p class="note" id="exMsg" style="margin:8px 0 6px"></p>
@@ -271,6 +272,7 @@
       </div>
       <div class="jobactions">
         <button class="btn" type="button" id="updateCheck">Check now</button>
+        <button class="btn primary" type="button" id="updateApplyHere" hidden>Update now</button>
       </div>
     </div>
     <p class="jobstatus" id="updateStatus"></p>

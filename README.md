@@ -175,10 +175,21 @@ well as going forward**, because the field's daily gauge figure is *derived* fro
 the stored station readings rather than frozen at fetch time. Nothing is
 deleted: tick it back on and the full history reappears.
 
-Excluding a gauge promotes the next station in range for that field, so turning
-off a distant gauge falls back to a better one rather than going blind. The
-promotion needs the full station lists, so run `npm run discover` after — the
-dashboard says so when it applies.
+Each field lists its **nearest six** gauges and counts the **nearest two**.
+Unticking one does **not** promote another into its place. A gauge half a mile
+from the field and one thirty miles away are measurements of different ground,
+and quietly substituting the second for the first changes what the field's
+number means while it still reads as the same column. The other four stay
+listed, so widening the net is something you do on purpose.
+
+Both numbers are `gauges.listNearest` and `gauges.countNearest` in
+`config.json`. They apply to a field the first time it is mapped; a field that
+already has gauges keeps whatever is ticked, so changing them — or updating an
+existing install — never rewrites decisions already made.
+
+Which day actually uses which gauge is still nearest-first: of the gauges that
+count, the field takes the nearest one that **reported** that day. Ticking a
+second one on is a fallback for the days the first is silent, not an average.
 
 It is stored per field in `config.json`:
 

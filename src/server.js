@@ -364,20 +364,15 @@ const server = createServer(async (req, res) => {
       }
       writeConfig(live);
       cfg = live;
-      // Flip the flags and re-derive immediately so the page updates now, then
-      // queue a remap in the background: promoting the next station into range
-      // needs the full station catalogues, which is a slow network round trip
-      // and should not hold up a checkbox.
+      // Flip the flags and re-derive, and that is the whole operation — no
+      // remap. Unticking a gauge used to queue a discover to promote the next
+      // station into range; it now means only what it says, so the answer is
+      // arithmetic on rows already here and the checkbox settles immediately.
       const f = cfg.fields.find(x => x.id === body.id);
       setStationExclusions(db, body.id, f.exclude?.stations ?? []);
       deriveField(db, body.id, 'gauge');
       deriveField(db, body.id, 'manual');
-      let job = null;
-      if (body.stations !== undefined) {
-        jobs.start('discover', { note: `after changing gauges for ${f.name}` });
-        job = 'Looking for another gauge in range';
-      }
-      return json(res, { ok: true, exclude: f.exclude ?? {}, job });
+      return json(res, { ok: true, exclude: f.exclude ?? {} });
     }
 
     if (p === '/api/fields') {

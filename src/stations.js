@@ -31,6 +31,21 @@ export function linkManualGauges(db, cfg, log = () => {}) {
   }
 }
 
+/**
+ * How many gauges a field lists, and how many of them count without being asked.
+ *
+ * One pair of numbers across every fetched network rather than a cap per
+ * network: "the six nearest gauges" is a statement about the ground around a
+ * field, and splitting it three ways meant the fourth-nearest station could be
+ * left out while a further one was kept for being on a different network.
+ */
+export const GAUGE_DEFAULTS = { listNearest: 6, countNearest: 2 };
+
+export const gaugeLimits = cfg => ({
+  listNearest: Number(cfg.gauges?.listNearest) > 0 ? Number(cfg.gauges.listNearest) : GAUGE_DEFAULTS.listNearest,
+  countNearest: Number(cfg.gauges?.countNearest) > 0 ? Number(cfg.gauges.countNearest) : GAUGE_DEFAULTS.countNearest,
+});
+
 /** The one-station "pool" an on-farm station forms, or null if it is unusable. */
 export function onFarmStationRow(of) {
   if (!of?.enabled || !Number.isFinite(of.lat) || !Number.isFinite(of.lon)) return null;
@@ -101,7 +116,7 @@ export async function discoverStations(db, cfg, log = console.log) {
     if (!row) {
       log('  ONFARM: enabled but lat/lon are unset — set them in the dashboard, under "Your own weather station"');
     } else {
-      pools.push({ kind: 'weatherlink', network: 'ONFARM', cfg: { ...of, maxStations: 1 }, stations: [row] });
+      pools.push({ kind: 'weatherlink', network: 'ONFARM', cfg: of, stations: [row] });
       log(`  ONFARM: 1 station (${of.name})`);
     }
   }
@@ -116,30 +131,44 @@ export async function discoverStations(db, cfg, log = console.log) {
 
   for (const pool of pools) for (const s of pool.stations) upsertStation(db, s);
 
-  const priorLinks = db.prepare('SELECT field_id, network, station_id, dist_km FROM field_station').all();
+  const priorLinks = db.prepare('SELECT field_id, network, station_id, dist_km, excluded FROM field_station').all();
+  const { listNearest, countNearest } = gaugeLimits(cfg);
+  const key = l => `${l.network}|${l.station_id}`;
+  const prior = new Map(priorLinks.map(l => [`${l.field_id}|${key(l)}`, l.excluded]));
 
   for (const f of cfg.fields) {
     const excluded = new Set(f.exclude?.stations ?? []);
-    const links = priorLinks.filter(l => l.field_id === f.id && failed.has(l.network))
-      .map(l => ({ ...l, excluded: excluded.has(`${l.network}|${l.station_id}`) ? 1 : 0 }));
+    const found = priorLinks.filter(l => l.field_id === f.id && failed.has(l.network));
     for (const pool of pools) {
-      const inRange = pool.stations
+      found.push(...pool.stations
         .map(s => ({ network: pool.network, station_id: s.id, name: s.name, dist_km: haversineKm(f.lat, f.lon, s.lat, s.lon) }))
-        .filter(s => s.dist_km <= (pool.cfg.maxDistanceKm ?? 50))
-        .sort((a, b) => a.dist_km - b.dist_km);
-      const drop = s => excluded.has(`${s.network}|${s.station_id}`);
-      // Excluding a station promotes the next one in range rather than just
-      // leaving the field a gauge short — the point of turning off a distant
-      // gauge is usually to fall back to a better one, not to go blind.
-      links.push(...inRange.filter(s => !drop(s)).slice(0, pool.cfg.maxStations ?? 3));
-      links.push(...inRange.filter(drop).map(s => ({ ...s, excluded: 1 })));
+        .filter(s => s.dist_km <= (pool.cfg.maxDistanceKm ?? 50)));
     }
-    links.sort((a, b) => a.dist_km - b.dist_km);
+    // The nearest N, full stop. Unticking one no longer promotes the next:
+    // the point of turning off a gauge half a mile away is not to be handed
+    // one thirty miles away in its place, which is a different measurement of
+    // a different piece of ground being presented as the same number.
+    const links = found.sort((a, b) => a.dist_km - b.dist_km).slice(0, listNearest);
+
+    // Has anything ever been settled for this field — by the person, or by a
+    // previous run? If so this discover must not change any of it, which is
+    // what keeps re-mapping on a machine that has been collecting for a year
+    // from quietly rearranging what counts there.
+    const settled = excluded.size > 0 || links.some(l => prior.has(`${f.id}|${key(l)}`));
+    links.forEach((l, i) => {
+      const was = prior.get(`${f.id}|${key(l)}`);
+      l.excluded =
+        excluded.has(key(l)) ? 1              // the field says so, in config
+        : was !== undefined ? was             // a decision already in force, left alone
+        : settled ? 1                         // new station on a field already set up: listed, never added
+        : i >= countNearest ? 1 : 0;          // first mapping: the nearest few count
+    });
+
     setFieldStations(db, f.id, links);
     const counted = links.filter(l => !l.excluded);
-    log(`  ${f.name}: ${counted.length} gauges`
-        + (links.length > counted.length ? ` (${links.length - counted.length} excluded)` : '')
-        + (counted[0] ? ` (nearest ${counted[0].station_id} @ ${counted[0].dist_km.toFixed(1)} km)` : ' — none in range, widen maxDistanceKm'));
+    log(`  ${f.name}: ${counted.length} of ${links.length} gauges counting`
+        + (counted[0] ? ` (nearest ${counted[0].station_id} @ ${counted[0].dist_km.toFixed(1)} km)`
+                      : links.length ? ' — all unticked' : ' — none in range, widen maxDistanceKm'));
   }
 
   // After the wipe-and-rebuild above, which clears MANUAL links along with the rest.

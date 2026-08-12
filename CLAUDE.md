@@ -101,9 +101,10 @@ so — otherwise the page waiting on the restart waits forever.
 ### Exclusions live in two places on purpose
 
 - `field.exclude.stations` → `field_station.excluded` → applied at **derive**
-  time (`setStationExclusions` + `deriveField`). Excluding a station promotes the
-  next in range, which needs the full station catalogues — hence the background
-  `discover` job.
+  time (`setStationExclusions` + `deriveField`). Excluding a station does **not**
+  promote the next in range: `discoverStations()` links the `gauges.listNearest`
+  closest across all fetched networks and that list is fixed by distance, so
+  unticking one only ever removes it. No remap is queued.
 - `field.exclude.sources` → applied at **read** time in `server.js:series()`,
   which blanks the column so every downstream view (tiles, charts, CSV) honours
   it from one place and the rows survive for when it is turned back on.
@@ -180,6 +181,14 @@ framework and no bundler — it is served as-is.
   codebase is dense with load-bearing rationale about upstream behaviour and
   farm-office constraints. Match that: when fixing something subtle, leave the
   reason behind, not just the fix.
+- **The default tick state lives in the DB, not in config.** A field that has
+  never been mapped gets `excluded = 1` on everything past `gauges.countNearest`,
+  and nothing is written to `config.json` for it — so `renderExclusions()` reads
+  the ticks from `field.stations[].excluded`, not from `exclude.stations`, and
+  the first toggle writes the *whole* state out. Reading config there would draw
+  every box ticked while the charts used two. The default is skipped for any
+  field that already has `field_station` rows, which is what keeps a re-discover
+  on a running install from changing what counts there.
 - **Linking a station you own is arithmetic, not discovery.** `discoverStations()`
   downloads three catalogues and rewrites every link; `linkManualGauges()` and
   `linkOnFarmStation()` touch one network each using coordinates already in

@@ -7,6 +7,12 @@
     { "id": "south-80",      "name": "South 80",      "farm": "Home Place", "lat": 39.3690, "lon": -101.0300, "acres": 80 }
   ],
 
+  "gauges": {
+    "_comment": "How many nearby gauges each field lists, and how many of them count without being asked. One pair of numbers across every fetched network, replacing the old per-network maxStations. Unticking a gauge does NOT promote the next one into its place — the list is the nearest N by distance and nothing else, because being handed a gauge thirty miles away in exchange for one half a mile away is a different measurement of different ground wearing the same name. Everything listed keeps its history either way, so ticking one back on restores it.",
+    "listNearest": 6,
+    "countNearest": 2
+  },
+
   "region": {
     "_comment": "Leave states empty and it is auto-detected from your field coordinates on `npm run init` / `npm run discover`, then written back here. Set it manually to override.",
     "states": [],
@@ -30,9 +36,8 @@
     "iem_gauge": {
       "enabled": true,
       "label": "NWS COOP + ASOS gauges",
-      "_comment": "Leave networks empty to auto-derive <STATE>_COOP and <STATE>_ASOS from the detected region. These cover the whole US.",
+      "_comment": "Leave networks empty to auto-derive <STATE>_COOP and <STATE>_ASOS from the detected region. These cover the whole US. maxDistanceKm is how far out to look; how many are kept and how many count is `gauges` above.",
       "networks": [],
-      "maxStations": 3,
       "maxDistanceKm": 60
     },
 
@@ -40,7 +45,6 @@
       "enabled": true,
       "label": "Kansas Mesonet",
       "_comment": "Kansas only — skipped automatically outside KS. Research-grade gauges, denser than COOP where it applies.",
-      "maxStations": 3,
       "maxDistanceKm": 70
     },
 
