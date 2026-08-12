@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT, SOURCES } from './util.js';
+import { ROOT, SOURCES, rangeKm, kmToMi } from './util.js';
 import { detectStates, networksFor, mesonetFor, STATE_MESONETS } from './region.js';
 
 export const CONFIG_PATH = join(ROOT, 'config.json');
@@ -173,7 +173,7 @@ export function updateField(cfg, id, patch) {
  * special cases. What is different is that nothing fetches them, so their
  * readings are typed in and never overwritten by an ingest.
  */
-export const MANUAL_DEFAULTS = { enabled: true, label: 'Manual gauges', maxStations: 2, maxDistanceKm: 25, gauges: [] };
+export const MANUAL_DEFAULTS = { enabled: true, label: 'Manual gauges', maxStations: 2, maxDistanceMi: 15, gauges: [] };
 
 export function manualGauges(cfg) {
   return cfg.sources?.manual?.gauges ?? [];
@@ -186,11 +186,11 @@ function manualSection(cfg) {
   return cfg.sources.manual;
 }
 
-export function upsertManualGauge(cfg, { id, name, lat, lon, maxDistanceKm }) {
+export function upsertManualGauge(cfg, { id, name, lat, lon, maxDistanceMi }) {
   const errors = validateField({ name, lat, lon });
-  const km = maxDistanceKm === '' || maxDistanceKm === undefined || maxDistanceKm === null
-    ? null : Number(maxDistanceKm);
-  if (km !== null && !(km > 0)) errors.push('range must be a positive number of km if given');
+  const mi = maxDistanceMi === '' || maxDistanceMi === undefined || maxDistanceMi === null
+    ? null : Number(maxDistanceMi);
+  if (mi !== null && !(mi > 0)) errors.push('range must be a positive number of miles if given');
   if (errors.length) throw new Error(errors.join('; '));
 
   const sec = manualSection(cfg);
@@ -203,8 +203,10 @@ export function upsertManualGauge(cfg, { id, name, lat, lon, maxDistanceKm }) {
   // Per-gauge range, because these differ in what they are for: the stick gauge
   // by the shop is a check on the home place, a neighbour's gauge speaks for the
   // two fields beside it and for nothing else.
-  if (km !== null) next.maxDistanceKm = km;
-  if (g) { delete g.maxDistanceKm; Object.assign(g, next); } else sec.gauges.push(next);
+  if (mi !== null) next.maxDistanceMi = mi;
+  // The old km key goes with it. Leaving both behind would be a gauge whose
+  // config says two different ranges, one of which is silently ignored.
+  if (g) { delete g.maxDistanceMi; delete g.maxDistanceKm; Object.assign(g, next); } else sec.gauges.push(next);
   sec.enabled = true;
   return next;
 }
@@ -221,7 +223,9 @@ export function adoptManualGauge(cfg, g) {
   const sec = manualSection(cfg);
   if (sec.gauges.some(x => x.id === g.id)) return null;
   const next = { id: String(g.id), name: String(g.name).trim(), lat: Number(g.lat), lon: Number(g.lon) };
-  if (Number(g.maxDistanceKm) > 0) next.maxDistanceKm = Number(g.maxDistanceKm);
+  // The sender may predate the switch to miles, so its range arrives in km.
+  const km = rangeKm(g);
+  if (km !== null) next.maxDistanceMi = Math.round(kmToMi(km) * 10) / 10;
   sec.gauges.push(next);
   sec.enabled = true;
   return next;
@@ -251,7 +255,7 @@ export const WEATHERLINK_DEFAULTS = {
   name: 'My Farm Station',
   lat: null, lon: null, elev_ft: null,
   dailyUrl: '', yearlyUrl: '',
-  maxDistanceKm: 30,
+  maxDistanceMi: 20,
 };
 
 /** The station that is switched on, or null when there is not one. */
@@ -279,14 +283,14 @@ function httpUrl(errors, v, label, required = false) {
  * it move on a rename would orphan a year of history behind an id nothing
  * refers to any more. It is derived once, from the name given the first time.
  */
-export function setOnFarmStation(cfg, { name, lat, lon, elev_ft, dailyUrl, yearlyUrl, maxDistanceKm }) {
+export function setOnFarmStation(cfg, { name, lat, lon, elev_ft, dailyUrl, yearlyUrl, maxDistanceMi }) {
   const errors = [];
   if (!name || !String(name).trim()) errors.push('station name is required');
   errors.push(...validateCoords(lat, lon));
   const daily = httpUrl(errors, dailyUrl, 'the daily report address (NOAAMO.txt)', true);
   const yearly = httpUrl(errors, yearlyUrl, 'the yearly report address (NOAAYR.txt)');
   if (!blank(elev_ft) && !Number.isFinite(Number(elev_ft))) errors.push('elevation must be a number of feet if given');
-  if (!blank(maxDistanceKm) && !(Number(maxDistanceKm) > 0)) errors.push('range must be a positive number of km if given');
+  if (!blank(maxDistanceMi) && !(Number(maxDistanceMi) > 0)) errors.push('range must be a positive number of miles if given');
   if (errors.length) throw new Error(errors.join('; '));
 
   if (!cfg.sources) cfg.sources = {};
@@ -303,8 +307,12 @@ export function setOnFarmStation(cfg, { name, lat, lon, elev_ft, dailyUrl, yearl
     elev_ft: blank(elev_ft) ? null : Number(elev_ft),
     dailyUrl: daily,
     yearlyUrl: yearly,
-    maxDistanceKm: blank(maxDistanceKm) ? (prev.maxDistanceKm ?? WEATHERLINK_DEFAULTS.maxDistanceKm) : Number(maxDistanceKm),
+    maxDistanceMi: blank(maxDistanceMi)
+      ? Math.round(kmToMi(rangeKm(prev, WEATHERLINK_DEFAULTS.maxDistanceMi)) * 10) / 10
+      : Number(maxDistanceMi),
   };
+  // A config written before the switch carries the km key through the spread.
+  delete next.maxDistanceKm;
   cfg.sources.weatherlink = next;
   return next;
 }

@@ -201,6 +201,13 @@ framework and no bundler — it is served as-is.
   every box ticked while the charts used two. The default is skipped for any
   field that already has `field_station` rows, which is what keeps a re-discover
   on a running install from changing what counts there.
+- **Distances are computed in km and displayed in miles, always.** `haversineKm`
+  and `field_station.dist_km` stay metric — internal units nobody reads. Every
+  user-facing distance goes through `fmtMi()` (`src/util.js`) or `mi()`
+  (`web/app.js`), including the `obs.detail` string `deriveField()` writes.
+  Config ranges are `maxDistanceMi`; `rangeKm()` still reads a legacy
+  `maxDistanceKm` **as kilometres**, because reinterpreting a 60 that meant km
+  as 60 miles would widen a field's net by half in silence.
 - **Linking a station you own is arithmetic, not discovery.** `discoverStations()`
   downloads three catalogues and rewrites every link; `linkManualGauges()` and
   `linkOnFarmStation()` touch one network each using coordinates already in

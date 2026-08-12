@@ -1,8 +1,8 @@
-import { haversineKm } from './util.js';
+import { haversineKm, rangeKm, fmtMi } from './util.js';
 import { fetchNetworkStations } from './sources/iemgauge.js';
 import { fetchKsStations } from './sources/ksmesonet.js';
 import { upsertStation, setFieldStations, setFieldStationsForNetwork } from './db.js';
-import { manualGauges } from './setup.js';
+import { manualGauges, MANUAL_DEFAULTS, WEATHERLINK_DEFAULTS } from './setup.js';
 
 /**
  * Map hand-read gauges to fields by distance.
@@ -17,17 +17,18 @@ export function linkManualGauges(db, cfg, log = () => {}) {
   const gauges = sec?.enabled === false ? [] : manualGauges(cfg);
   for (const g of gauges) upsertStation(db, { ...g, network: 'MANUAL' });
 
+  const sectionKm = rangeKm(sec, MANUAL_DEFAULTS.maxDistanceMi);
   for (const f of cfg.fields) {
     const excluded = new Set(f.exclude?.stations ?? []);
     const near = gauges
       .filter(g => Number.isFinite(g.lat) && Number.isFinite(g.lon))
-      .map(g => ({ station_id: g.id, dist_km: haversineKm(f.lat, f.lon, g.lat, g.lon), range: g.maxDistanceKm }))
-      .filter(g => g.dist_km <= (g.range ?? sec?.maxDistanceKm ?? 25))
+      .map(g => ({ station_id: g.id, dist_km: haversineKm(f.lat, f.lon, g.lat, g.lon), limit: rangeKm(g) ?? sectionKm }))
+      .filter(g => g.dist_km <= g.limit)
       .sort((a, b) => a.dist_km - b.dist_km)
       .slice(0, sec?.maxStations ?? 2)
       .map(g => ({ ...g, excluded: excluded.has(`MANUAL|${g.station_id}`) ? 1 : 0 }));
     setFieldStationsForNetwork(db, f.id, 'MANUAL', near);
-    if (near.length) log(`  ${f.name}: manual ${near.map(g => `${g.station_id} @ ${g.dist_km.toFixed(1)} km`).join(', ')}`);
+    if (near.length) log(`  ${f.name}: manual ${near.map(g => `${g.station_id} @ ${fmtMi(g.dist_km)}`).join(', ')}`);
   }
 }
 
@@ -73,13 +74,13 @@ export function linkOnFarmStation(db, cfg, log = () => {}) {
     const links = [];
     if (row) {
       const dist_km = haversineKm(f.lat, f.lon, row.lat, row.lon);
-      if (dist_km <= (of.maxDistanceKm ?? 30))
+      if (dist_km <= rangeKm(of, WEATHERLINK_DEFAULTS.maxDistanceMi))
         links.push({ station_id: row.id, dist_km, excluded: excluded.has(`ONFARM|${row.id}`) ? 1 : 0 });
     }
     // Also the path that unlinks it: an empty list clears the ONFARM rows, so
     // switching the station off stops it counting without a rediscovery.
     setFieldStationsForNetwork(db, f.id, 'ONFARM', links);
-    if (links.length) log(`  ${f.name}: on-farm station @ ${links[0].dist_km.toFixed(1)} km`);
+    if (links.length) log(`  ${f.name}: on-farm station @ ${fmtMi(links[0].dist_km)}`);
   }
 }
 
@@ -142,7 +143,7 @@ export async function discoverStations(db, cfg, log = console.log) {
     for (const pool of pools) {
       found.push(...pool.stations
         .map(s => ({ network: pool.network, station_id: s.id, name: s.name, dist_km: haversineKm(f.lat, f.lon, s.lat, s.lon) }))
-        .filter(s => s.dist_km <= (pool.cfg.maxDistanceKm ?? 50)));
+        .filter(s => s.dist_km <= rangeKm(pool.cfg, 30)));
     }
     // The nearest N, full stop. Unticking one no longer promotes the next:
     // the point of turning off a gauge half a mile away is not to be handed
@@ -167,8 +168,8 @@ export async function discoverStations(db, cfg, log = console.log) {
     setFieldStations(db, f.id, links);
     const counted = links.filter(l => !l.excluded);
     log(`  ${f.name}: ${counted.length} of ${links.length} gauges counting`
-        + (counted[0] ? ` (nearest ${counted[0].station_id} @ ${counted[0].dist_km.toFixed(1)} km)`
-                      : links.length ? ' — all unticked' : ' — none in range, widen maxDistanceKm'));
+        + (counted[0] ? ` (nearest ${counted[0].station_id} @ ${fmtMi(counted[0].dist_km)})`
+                      : links.length ? ' — all unticked' : ' — none in range, widen maxDistanceMi'));
   }
 
   // After the wipe-and-rebuild above, which clears MANUAL links along with the rest.

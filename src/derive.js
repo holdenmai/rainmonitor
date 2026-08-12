@@ -1,4 +1,5 @@
 import { upsertObs, transact } from './db.js';
+import { fmtMi } from './util.js';
 
 /**
  * A field's daily gauge figure is derived, not fetched: it is whichever linked
@@ -36,7 +37,7 @@ export function deriveField(db, fieldId, kind = 'gauge') {
       if (r.date === last) continue;   // ordered by distance, so the first row for a date is the nearest
       last = r.date;
       upsertObs(db, fieldId, r.date, source, r.precip_in,
-        `${r.station_id} (${r.network}) ${r.dist_km.toFixed(1)} km`);
+        `${r.station_id} (${r.network}) ${fmtMi(r.dist_km)}`);
       n++;
     }
     return n;

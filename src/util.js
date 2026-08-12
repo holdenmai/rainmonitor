@@ -20,6 +20,36 @@ export function haversineKm(lat1, lon1, lat2, lon2) {
 export const MM_TO_IN = 1 / 25.4;
 
 /**
+ * Distances are computed in km and shown in miles, always.
+ *
+ * The great-circle maths and the `dist_km` column stay metric — that is an
+ * internal unit and renaming it would be churn — but nothing a person reads is
+ * in kilometres. Nobody standing in a field in Kansas can tell you whether a
+ * gauge 27 km away is close.
+ */
+export const MI_PER_KM = 0.621371;
+export const kmToMi = km => km * MI_PER_KM;
+export const miToKm = mi => mi / MI_PER_KM;
+export const fmtMi = km => `${kmToMi(km).toFixed(1)} mi`;
+
+/**
+ * A source's "look this far out" limit, in km for the distance maths.
+ *
+ * Config carries it in miles as `maxDistanceMi`. `maxDistanceKm` is still read
+ * because every config written before the switch has it, and reinterpreting a
+ * 60 that meant kilometres as 60 miles would widen that field's net by half
+ * without a word — the sort of unit bug that shows up as a gauge appearing out
+ * of nowhere months later.
+ */
+export function rangeKm(section, defaultMi = null) {
+  const mi = Number(section?.maxDistanceMi);
+  if (mi > 0) return miToKm(mi);
+  const km = Number(section?.maxDistanceKm);
+  if (km > 0) return km;
+  return defaultMi === null ? null : miToKm(defaultMi);
+}
+
+/**
  * Every per-field daily series stored in `obs`. Order is display order.
  *
  * `gauge` and `manual` are the derived nearest-reporting figures. The charts

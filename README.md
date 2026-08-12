@@ -125,6 +125,18 @@ pin them yourself, edit `region.states` and set `region.autoDetected` to `false`
 A field is a single point, not a polygon. For a quarter section that is well
 inside the grid resolution, so it makes no practical difference.
 
+### Miles, not kilometres
+
+Every distance on screen is in **miles** — how far each gauge is, how far a
+gauge reaches, the search radius per network. The great-circle maths and the
+`dist_km` column stay metric internally because that is not something anybody
+reads.
+
+Ranges in `config.json` are `maxDistanceMi`. A config written before this
+switch has `maxDistanceKm` and is still read **as kilometres**, so nothing
+moves under you; the dashboard converts for display, and rewrites the key in
+miles the next time you save that gauge or station from the UI.
+
 ### Farms
 
 Every field can carry an optional **farm** — free-form text, so it can be an
@@ -154,10 +166,10 @@ within range. Two things are different.
   double check — averaging it into the same line would hide exactly the
   disagreement you put it there to see.
 
-Each gauge can carry its own **range** in km. The default (`maxDistanceKm` under
-`sources.manual`) is 25 km, which is right for a gauge that speaks for the home
-place; set a tighter one on a neighbour's gauge so it covers the two fields
-beside it and nothing else.
+Each gauge can carry its own **range** in miles. The default (`maxDistanceMi`
+under `sources.manual`) is 15 miles, which is right for a gauge that speaks for
+the home place; set a tighter one on a neighbour's gauge so it covers the two
+fields beside it and nothing else.
 
 Leaving the amount blank deletes a reading rather than storing `0.00` — "I
 haven't read it" and "it stayed dry" have to stay different answers. Removing a

@@ -5,9 +5,9 @@
  * struggles with and aqua between them fixes it.
  */
 const GRID_SERIES = [
-  { key: 'rfcqpe', label: 'RFC QPE 4km', color: 'var(--series-rfcqpe)', note: 'NWS multi-sensor, finest grid here' },
-  { key: 'prism',  label: 'PRISM',       color: 'var(--series-prism)',  note: '4km climate analysis' },
-  { key: 'mrms',   label: 'Radar QPE',   color: 'var(--series-mrms)',   note: 'MRMS via IEM, ~12km' },
+  { key: 'rfcqpe', label: 'RFC QPE', color: 'var(--series-rfcqpe)', note: 'NWS multi-sensor, ~2.5 mi grid' },
+  { key: 'prism',  label: 'PRISM',   color: 'var(--series-prism)',  note: '~2.5 mi climate analysis' },
+  { key: 'mrms',   label: 'Radar QPE', color: 'var(--series-mrms)', note: 'MRMS via IEM, ~7 mi grid' },
 ];
 
 /** What `exclude.sources` can switch off. Gauges are switched off individually,
@@ -38,7 +38,7 @@ const gaugeSeries = gauges => gauges.map((g, i) => ({
   key: g.key,
   label: g.name,
   color: `var(--series-g${i + 1})`,
-  note: `${g.manual ? 'read by hand' : g.network.replace(/_/g, ' ')}, ${g.dist_km.toFixed(1)} km`,
+  note: `${g.manual ? 'read by hand' : g.network.replace(/_/g, ' ')}, ${mi(g.dist_km)}`,
   gauge: g,
 }));
 
@@ -53,6 +53,11 @@ const el = (n, a = {}, kids = []) => {
   return e;
 };
 const fmt = v => (v === null || v === undefined ? '—' : v.toFixed(2));
+// Distances arrive in km — the column and the great-circle maths are metric —
+// and are never shown that way. Same constant as src/util.js; there is no
+// module shared between the two sides and one multiplication is not worth one.
+const MI_PER_KM = 0.621371;
+const mi = km => `${(km * MI_PER_KM).toFixed(1)} mi`;
 const has = v => v !== null && v !== undefined;
 const mdy = d => { const [y, m, dd] = d.split('-'); return `${+m}/${+dd}`; };
 
@@ -453,7 +458,7 @@ async function load() {
     const d = pick(w);
     const fine = has(d.rfcqpe) && d.rfcqpe > 0;
     const r = fine ? d.rfcqpe : d.mrms;
-    const src = fine ? 'RFC QPE 4km' : 'Radar QPE ~12km';
+    const src = fine ? 'RFC QPE, ~2.5 mi grid' : 'Radar QPE, ~7 mi grid';
     const col = fine ? 'var(--series-rfcqpe)' : 'var(--series-mrms)';
     // A line per gauge rather than one "gauge" figure: two gauges that read
     // differently over the same week is the thing worth seeing at a glance,
@@ -486,8 +491,8 @@ async function load() {
     + 'Each gauge is drawn on its own; where two of them disagree, that is two readings of two different pieces of ground, not an error. '
     + 'PRISM and RFC QPE both run on a 12Z–12Z day, so a single storm can land on either side of midnight local; compare those over a week, not a day. '
     + (rfcFrom
-        ? `RFC QPE is the finest grid here (~4 km) but publishes no archive, so it only exists from ${rfcFrom} forward.`
-        : 'RFC QPE (~4 km) starts collecting on the next ingest — it publishes no archive, so it cannot be backfilled.')
+        ? `RFC QPE is the finest grid here — about 2.5 miles across, roughly a section and a half — but it publishes no archive, so it only exists from ${rfcFrom} forward.`
+        : 'RFC QPE (about 2.5 miles across) starts collecting on the next ingest — it publishes no archive, so it cannot be backfilled.')
     + (uncharted?.length
         ? ` ${uncharted.join(' and ')} also count${uncharted.length === 1 ? 's' : ''} for this field but ${uncharted.length === 1 ? 'is' : 'are'} not drawn — there are four gauge colours that stay apart from each other and from the grid.`
         : '');
@@ -898,7 +903,10 @@ function renderStation({ fill = false } = {}) {
 
   if (fill) for (const [k, v] of Object.entries({
     name: s?.name, lat: s?.lat, lon: s?.lon, elev_ft: s?.elev_ft,
-    maxDistanceKm: s?.maxDistanceKm, dailyUrl: s?.dailyUrl, yearlyUrl: s?.yearlyUrl,
+    // A config written before the switch to miles still carries km, and the
+    // box says miles — so show what the range actually is, not the number.
+    maxDistanceMi: s?.maxDistanceMi ?? (s?.maxDistanceKm ? +(s.maxDistanceKm * MI_PER_KM).toFixed(1) : ''),
+    dailyUrl: s?.dailyUrl, yearlyUrl: s?.yearlyUrl,
   })) f[k].value = v ?? '';
 
   // Which fields it reaches comes from the links the server computed, so this
@@ -911,7 +919,7 @@ function renderStation({ fill = false } = {}) {
       + 'have — and the gauge the radar gets calibrated against.</span>'
     : `<span>${esc(s.name)} <span class="none">(${esc(s.stationId)})</span> at ${Number(s.lat).toFixed(4)}, `
       + `${Number(s.lon).toFixed(4)} — ${covers.length ? `counts for ${esc(covers.join(', '))}`
-        : `<span class="warn">no field within ${s.maxDistanceKm ?? 30} km</span>`}.</span>`;
+        : `<span class="warn">no field within ${s.maxDistanceMi ?? 20} miles</span>`}.</span>`;
 }
 
 function wireStation() {
@@ -1031,7 +1039,7 @@ async function renderGauges() {
     const on = covers(g);
     return `<tr>
       <td>${esc(g.name)}</td><td>${g.lat.toFixed(6)}</td><td>${g.lon.toFixed(6)}</td>
-      <td class="${g.maxDistanceKm ? '' : 'none'}">${g.maxDistanceKm ? `${g.maxDistanceKm} km` : 'default'}</td>
+      <td class="${g.maxDistanceMi ? '' : 'none'}">${g.maxDistanceMi ? `${g.maxDistanceMi} mi` : 'default'}</td>
       <td class="none">${on.length ? esc(on.join(', ')) : 'no field within range'}</td>
       <td>${counts[g.id] ?? 0}</td>
       <td><button class="linkbtn danger" data-delgauge="${esc(g.id)}" data-name="${esc(g.name)}">Remove</button></td>
@@ -1140,8 +1148,8 @@ function renderExclusions(field) {
     return `<tr><td><span class="tick"><input type="checkbox" data-sta="${esc(stationKey(s))}"${on ? ' checked' : ''}
         aria-label="Count ${esc(s.name ?? s.station_id)} for this field"></span></td>
       <td${on ? '' : ' class="none"'}>${esc(s.name ?? s.station_id)} <span class="none">(${esc(s.station_id)})</span></td>
-      <td class="none">${esc(s.network)}</td><td${on ? '' : ' class="none"'}>${s.dist_km.toFixed(1)} km</td></tr>`;
-  }).join('') : '<tr><td colspan="4" class="none">No gauge within range — widen maxDistanceKm in config.json.</td></tr>';
+      <td class="none">${esc(s.network)}</td><td${on ? '' : ' class="none"'}>${mi(s.dist_km)}</td></tr>`;
+  }).join('') : '<tr><td colspan="4" class="none">No gauge within range — widen maxDistanceMi in config.json.</td></tr>';
 
   st.querySelectorAll('[data-sta]').forEach(box => box.addEventListener('change', () => {
     const next = new Set(exSta);
@@ -1188,7 +1196,7 @@ function renderFields() {
       <td>${f.lat.toFixed(6)}</td>
       <td>${f.lon.toFixed(6)}</td>
       <td>${cell(f, 'acres', 'num')}</td>
-      <td class="none">${near ? `${esc(near.name ?? near.station_id)} · ${near.dist_km.toFixed(1)} km` : 'none in range'}</td>
+      <td class="none">${near ? `${esc(near.name ?? near.station_id)} · ${mi(near.dist_km)}` : 'none in range'}</td>
       <td><button class="linkbtn danger" data-del="${f.id}" data-name="${esc(f.name)}">Remove</button></td>
     </tr>`;
   }).join('');
@@ -1235,7 +1243,7 @@ function renderFields() {
   $('addGauge').addEventListener('submit', async e => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
-    if (!fd.maxDistanceKm) delete fd.maxDistanceKm;
+    if (!fd.maxDistanceMi) delete fd.maxDistanceMi;
     if (await saveGauge(fd)) {
       e.target.reset();
       gaugeMsg(`Added ${fd.name}. It now covers any field within range — enter its readings below.`);
