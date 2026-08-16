@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join, extname, normalize } from 'node:path';
 import { openDb, syncFields, setStationExclusions, upsertStationObs, deleteStationObs } from './db.js';
-import { loadConfig, ROOT, today, addDays, isIsoDate, cleanPrecipIn, SOURCES } from './util.js';
+import { loadConfig, ROOT, today, addDays, isIsoDate, cleanPrecipIn, SOURCES, historyStart, HISTORY_FLOOR_YEAR } from './util.js';
 import { calibration } from './calibration.js';
 import {
   readConfig, writeConfig, autoDetectRegion,
@@ -411,6 +411,29 @@ const server = createServer(async (req, res) => {
       return json(res, { ok: true, gauge: gauge.id, date: body.date, precip_in: v });
     }
 
+    // --- How far back history is pulled ---
+    //
+    // Written to config rather than passed per click, because the same answer
+    // has to reach the *new field* path: a quarter section added to a farm
+    // holding forty years should arrive holding forty years.
+    if (p === '/api/config/history') {
+      if (req.method !== 'POST') return send(res, 405, 'text/plain', 'method not allowed');
+      if (!isLocal(req)) return send(res, 403, 'text/plain', 'editing is restricted to localhost');
+      const body = await readBody(req);
+      const y = Number(body.historyFromYear);
+      const thisYear = new Date().getFullYear();
+      if (!Number.isInteger(y) || y < HISTORY_FLOOR_YEAR || y > thisYear)
+        return send(res, 400, 'application/json', JSON.stringify({
+          error: `year must be between ${HISTORY_FLOOR_YEAR} and ${thisYear} — PRISM, the deepest daily source here, publishes nothing before ${HISTORY_FLOOR_YEAR}`,
+        }));
+
+      const live = readConfig();
+      live.ingest = { ...(live.ingest ?? {}), historyFromYear: y };
+      writeConfig(live);
+      cfg = live;
+      return json(res, { ok: true, historyFromYear: y, sdate: historyStart(cfg) });
+    }
+
     // --- Per-field exclusions: which sources and gauges count here ---
     if (p === '/api/config/exclusions') {
       if (req.method !== 'POST') return send(res, 405, 'text/plain', 'method not allowed');
@@ -448,6 +471,15 @@ const server = createServer(async (req, res) => {
         station: onFarmStation(cfg),
         farms: farmsOf(cfg.fields),
         seasonStart: seasonStart(), growingStart: growStart(),
+        // How deep history is pulled, and what the earliest stored day actually
+        // is — the setting and the reality, because they differ until the pull
+        // has been run and that difference is the thing worth showing.
+        history: {
+          fromYear: cfg.ingest?.historyFromYear ?? null,
+          sdate: historyStart(cfg),
+          floorYear: HISTORY_FLOOR_YEAR,
+          earliest: db.prepare('SELECT MIN(date) d FROM obs').get()?.d ?? null,
+        },
         lastIngest: db.prepare('SELECT MAX(ts) t FROM ingest_log').get()?.t ?? null,
       });
     }

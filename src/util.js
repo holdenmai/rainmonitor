@@ -90,6 +90,29 @@ export function daysBetween(a, b) {
   return Math.round((new Date(y2, m2 - 1, d2) - new Date(y1, m1 - 1, d1)) / 86400000);
 }
 
+/** PRISM publishes from 1981 and nothing here reaches usefully past it, so it
+ *  is the floor the dashboard offers and the furthest back a typo can ask for. */
+export const HISTORY_FLOOR_YEAR = 1981;
+
+/**
+ * How far back a backfill starts, as one answer for every caller.
+ *
+ * `ingest.historyFromYear` is a year because that is how anyone thinks about
+ * "how far back" — nobody asks for 16,436 days. The older `backfillDays` still
+ * reads correctly when the year is unset, so a config written before this
+ * existed keeps its meaning instead of silently becoming 1981.
+ *
+ * This is deliberately shared with the *new field* path. Adding a quarter
+ * section to a farm that already holds forty years and having it arrive with
+ * 400 days would be a difference nothing on screen explains.
+ */
+export function historyStart(cfg) {
+  const y = Number(cfg?.ingest?.historyFromYear);
+  if (Number.isInteger(y) && y >= HISTORY_FLOOR_YEAR && y <= new Date().getFullYear())
+    return `${y}-01-01`;
+  return addDays(today(), -(cfg?.ingest?.backfillDays ?? 400));
+}
+
 /**
  * fetch with retry + timeout. NOAA/IEM/K-State endpoints intermittently 5xx or
  * hang; a farm data pull should survive that rather than lose the day's record.

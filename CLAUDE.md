@@ -201,6 +201,16 @@ framework and no bundler — it is served as-is.
   month / calendar year (`binFor`) — and the cumulative chart spaces points by
   position rather than date, so `load()` names any year with no rows instead of
   drawing the gap closed.
+- **How far back to pull is config, not a button, because the new-field path
+  needs the same answer.** `ingest.historyFromYear` is set from the Data
+  collection card and resolved by `historyStart()` in `src/util.js`; the legacy
+  `backfillDays` still reads correctly when the year is unset, so an older
+  config keeps its meaning rather than silently becoming 1981. Both the
+  `backfill` and `newfield` jobs go through `resolveStart()` — a quarter section
+  added to a farm holding forty years should arrive holding forty years, and
+  that was the bug before this existed. `resolveStart()` deliberately does not
+  clamp to 1981: that floor belongs to the gridded sources, while the same run
+  also pulls COOP gauges that predate it.
 - **The series palette is validated per prefix, not once.** A field draws a
   different number of gauge series, so `--series-g1..g4` followed by rfcqpe /
   prism / mrms was ordered so that *every* prefix clears the adjacent-pair CVD

@@ -87,6 +87,8 @@
   },
 
   "ingest": {
+    "historyFromYear": 1981,
+    "_historyComment": "How far back 'Pull history' goes, and — deliberately the same answer — how much history a newly added field arrives with. A year rather than a count of days, because nobody asks for 16,436 of them. 1981 is the floor worth offering: PRISM, the deepest daily source here, publishes nothing before it, and radar QPE only exists from about 2014. Leave it unset and the older backfillDays is used instead.",
     "backfillDays": 400,
     "revisitDays": 10,
     "_revisitComment": "Re-fetch the last N days every run. PRISM and COOP reports get revised after publication, so recent days are not final.",

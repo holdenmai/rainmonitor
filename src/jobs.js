@@ -1,6 +1,6 @@
 import { discoverStations } from './stations.js';
 import { ingest } from './ingest.js';
-import { today, addDays } from './util.js';
+import { today, addDays, isIsoDate, historyStart } from './util.js';
 
 /**
  * The data collection runs inside the dashboard.
@@ -16,6 +16,24 @@ import { today, addDays } from './util.js';
  * second writer to fight over the SQLite lock.
  */
 const MAX_LINES = 200;
+
+/**
+ * Where a backfill starts: an explicit date if it is one, then an explicit
+ * depth in days, then whatever the config says history goes back to.
+ *
+ * Validated here rather than at the HTTP endpoint so every caller gets the same
+ * treatment — the start date reaches a SQL bound and an upstream URL, and
+ * "undefined" would reach both as the string. It is deliberately *not* clamped
+ * to PRISM's 1981 floor: that floor belongs to the gridded sources, and this
+ * same run also pulls COOP gauges, some of which have been reporting since long
+ * before it. The dashboard offers 1981 because that is the useful answer there;
+ * it is not a limit worth welding into every path.
+ */
+function resolveStart(cfg, opts) {
+  if (isIsoDate(opts.sdate)) return opts.sdate > today() ? today() : opts.sdate;
+  if (opts.days) return addDays(today(), -Number(opts.days));
+  return historyStart(cfg);
+}
 
 export function createJobs(db, getCfg) {
   const state = { running: null, queue: [], last: {} };
@@ -36,8 +54,10 @@ export function createJobs(db, getCfg) {
       label: 'Pulling past rainfall',
       run: async (log, opts) => {
         const cfg = getCfg();
-        const days = Number(opts.days) || cfg.ingest?.backfillDays || 400;
-        return ingest(db, cfg, { sdate: addDays(today(), -days), log, onlyFields: opts.fields });
+        // An explicit ask wins; otherwise the configured depth, which is the
+        // same one a newly added field gets.
+        const sdate = resolveStart(cfg, opts);
+        return ingest(db, cfg, { sdate, log, onlyFields: opts.fields });
       },
     },
     // A newly added on-farm station. Linking it to fields is instant, but its
@@ -54,8 +74,9 @@ export function createJobs(db, getCfg) {
       run: async (log, opts) => {
         const cfg = getCfg();
         await discoverStations(db, cfg, log);
-        const days = Number(opts.days) || cfg.ingest?.backfillDays || 400;
-        await ingest(db, cfg, { sdate: addDays(today(), -days), log, onlyFields: opts.fields });
+        // The same depth the rest of the farm holds — see historyStart().
+        const sdate = resolveStart(cfg, opts);
+        await ingest(db, cfg, { sdate, log, onlyFields: opts.fields });
       },
     },
   };

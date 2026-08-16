@@ -876,6 +876,7 @@ async function load() {
   renderExclusions(field);
   renderFields();
   renderStation();
+  renderHistory();
 
   $('csvBtn').href = `/api/export.csv?field=${fieldId}&days=${Math.max(days, 400)}`;
   $('subtitle').textContent = [
@@ -1043,6 +1044,69 @@ async function pollJobs() {
   jobTimer = setTimeout(pollJobs, running || s.queued?.length ? 1500 : 60000);
 }
 
+/* ---------- how far back history goes ---------- */
+const historyMsg = (t, bad) => note('historyMsg', t, bad);
+
+/** The year box and the sentence under it, from the server's own answer rather
+ *  than from a constant here — the floor is a property of what PRISM publishes. */
+function renderHistory() {
+  const h = META.history ?? {};
+  const box = $('historyForm').elements.historyFromYear;
+  const thisYear = new Date().getFullYear();
+  box.min = h.floorYear ?? PRISM_FROM;
+  box.max = thisYear;
+  // Only fill the box when it is untouched, so re-rendering after a field edit
+  // does not overwrite a year somebody is halfway through typing.
+  if (!box.value) box.value = h.fromYear ?? ((h.sdate ?? '').slice(0, 4) || box.min);
+
+  const have = h.earliest
+    ? `The earliest day stored is ${h.earliest}.`
+    : 'Nothing is stored yet.';
+  historyMsg(`${have} This setting is also what a newly added field gets, so one added later arrives with the same `
+    + `depth as the rest. ${box.min} is as far back as this goes — PRISM, the deepest daily source here, publishes `
+    + 'nothing before it, and radar QPE only exists from about 2014.');
+}
+
+function wireHistory() {
+  $('historyForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target.elements;
+    const year = Number(f.historyFromYear.value);
+    const one = f.scope.value === 'one';
+    const fields = one ? [$('fieldSel').value] : null;
+    const n = one ? 1 : (META.fields ?? []).length;
+    const years = Math.max(1, new Date().getFullYear() - year + 1);
+
+    // Saved before it is run, and saved even for a one-field pull: the setting
+    // is "how much history this farm keeps", which is a different question from
+    // "which fields am I filling in right now".
+    historyMsg('Saving…');
+    const res = await fetch('/api/config/history', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ historyFromYear: year }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return historyMsg(body.error || `Failed (${res.status})`, true);
+
+    // Roughly three seconds per year per field, measured. Worth stating before
+    // the click rather than leaving someone watching a log for twenty minutes
+    // wondering whether it has hung.
+    const mins = Math.ceil(years * n * 3 / 60);
+    if (!confirm(`Pull ${years} year${years === 1 ? '' : 's'} back to ${year} for `
+      + `${one ? 'the selected field' : `all ${n} field${n === 1 ? '' : 's'}`}?\n\n`
+      + `That is roughly ${mins} minute${mins === 1 ? '' : 's'}, and it runs in the background while you use the `
+      + 'dashboard. Each year is saved as it arrives, so stopping partway keeps what it got and running it again '
+      + 'picks up from there.')) {
+      META = await fetch('/api/fields').then(r => r.json());
+      return historyMsg(`Saved ${year} as the depth for new fields. Nothing pulled.`);
+    }
+
+    await startJob('backfill', { sdate: `${year}-01-01`, fields, note: `history back to ${year}` });
+    META = await fetch('/api/fields').then(r => r.json());
+    historyMsg(`Pulling ${years} year${years === 1 ? '' : 's'} back to ${year} — see the log above.`);
+  });
+}
+
 async function startJob(job, extra = {}) {
   await fetch('/api/jobs', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1056,23 +1120,7 @@ async function startJob(job, extra = {}) {
 function wireJobs() {
   $('jobIngest').addEventListener('click', () => startJob('ingest', { note: 'requested from the dashboard' }));
   $('jobDiscover').addEventListener('click', () => startJob('discover', { note: 'requested from the dashboard' }));
-  $('jobBackfill').addEventListener('click', () => {
-    if (!confirm('Pull the past year for every field? This can take several minutes.')) return;
-    startJob('backfill', { note: 'requested from the dashboard' });
-  });
-  // The deep pull. PRISM is published from 1981, so this is where a field stops
-  // having one season of history and starts having four decades of it. It is
-  // slow enough to be worth saying so up front — roughly three seconds per year
-  // per field — and it stores each year as it finishes, so stopping partway
-  // keeps what it already has and running it again resumes.
-  $('jobHistory').addEventListener('click', () => {
-    const n = (META.fields ?? []).length;
-    const years = new Date().getFullYear() - PRISM_FROM + 1;
-    if (!confirm(`Pull every year back to ${PRISM_FROM} for all ${n} field${n === 1 ? '' : 's'}?\n\n`
-      + `That is ${years} years each, about ${Math.ceil(years * n * 3 / 60)} minutes, and it can run in the background `
-      + 'while you use the dashboard. Each year is saved as it arrives, so stopping partway keeps what it got.')) return;
-    startJob('backfill', { days: daysBetweenIso(`${PRISM_FROM}-01-01`, todayIso()), note: `history back to ${PRISM_FROM}` });
-  });
+  wireHistory();
   pollJobs();
 }
 

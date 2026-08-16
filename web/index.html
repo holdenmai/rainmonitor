@@ -133,12 +133,24 @@
       <div class="jobactions">
         <button class="btn" type="button" id="jobIngest">Check for new rainfall</button>
         <button class="btn" type="button" id="jobDiscover">Re-map gauges</button>
-        <button class="btn" type="button" id="jobBackfill">Pull past year</button>
-        <button class="btn" type="button" id="jobHistory">Pull all history</button>
       </div>
     </div>
     <p class="jobstatus" id="jobStatus"></p>
     <pre class="joblog" id="jobLog" hidden></pre>
+
+    <form class="fieldform" id="historyForm">
+      <label>History back to
+        <input type="number" name="historyFromYear" step="1" required>
+      </label>
+      <label>Pull for
+        <select name="scope">
+          <option value="all">Every field</option>
+          <option value="one">The selected field only</option>
+        </select>
+      </label>
+      <button class="btn primary" type="submit" id="historyPull">Pull history</button>
+    </form>
+    <p class="note" id="historyMsg"></p>
   </section>
 
   <section class="card">
