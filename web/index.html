@@ -33,7 +33,12 @@
         <option value="30" selected>Last 30 days</option>
         <option value="90">Last 90 days</option>
         <option value="365">Last 12 months</option>
+        <option value="ytd">Year to date</option>
       </select>
+    </label>
+    <label class="ctl">
+      <span>Compare with</span>
+      <select id="cmpSel"><option value="">No comparison</option></select>
     </label>
     <button id="themeBtn" class="btn" type="button" aria-label="Toggle dark mode">◐</button>
     <a id="csvBtn" class="btn" href="/api/export.csv?days=400" download>Export CSV</a>
@@ -69,7 +74,7 @@
     <div class="card-head">
       <div>
         <h2>Cumulative over selected range</h2>
-        <p class="note">Accumulates across the range chosen above, not the whole season. This is the honest way to compare sources — day-level binning differences wash out, so a gap that keeps widening is a real disagreement about this field. Two gauges drifting apart over a month is the clearest reading you get of how much a few miles matters here.</p>
+        <p class="note" id="cumNote"></p>
       </div>
       <div class="legend" id="legendCum"></div>
     </div>

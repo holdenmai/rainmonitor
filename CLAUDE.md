@@ -177,6 +177,17 @@ framework and no bundler — it is served as-is.
   all-fields chart, the calibration and the CSV need. Charted gauges are capped
   at `GAUGE_SLOTS` (4) and the rest are named in the response's `uncharted`, so
   the cap is stated rather than silent.
+- **The year comparison is encoded by position and stroke, never by hue.**
+  Picking a year in the "Compare with" box fetches the same month-day window
+  shifted back N years (`/api/series` takes `from`/`to`) and folds it onto the
+  same rows as `c:<key>` columns, matched on month-day so a leap day drops out
+  instead of shunting every later date one place. The daily chart mirrors last
+  year *below* the baseline on the same scale; the cumulative chart overlays it
+  dashed, in the same colour per source. One of the readers is colourblind, so a
+  shifted or faded hue is not available: shift it far enough to see and the two
+  years stop reading as the same series. The fade (`CMP_FADE`) is a third signal
+  on top of position, never the only one. Ranges never exceed a year, which is
+  what makes month-day a unique key.
 - **The series palette is validated per prefix, not once.** A field draws a
   different number of gauge series, so `--series-g1..g4` followed by rfcqpe /
   prism / mrms was ordered so that *every* prefix clears the adjacent-pair CVD

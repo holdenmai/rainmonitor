@@ -80,7 +80,7 @@ const chartGauges = fieldId => fieldGauges(fieldId).slice(0, GAUGE_SLOTS);
  * downstream view — KPI tiles, charts, table, CSV — honours the exclusion from
  * one place, and the underlying rows stay intact for when it is turned back on.
  */
-function series(fieldId, since) {
+function series(fieldId, since, until = '9999-12-31') {
   const rows = db.prepare(`
     SELECT date,
       MAX(CASE WHEN source='gauge'  THEN precip_in END) gauge,
@@ -91,8 +91,8 @@ function series(fieldId, since) {
       MAX(CASE WHEN source='iemre'  THEN precip_in END) iemre,
       MAX(CASE WHEN source='gauge'  THEN detail    END) gauge_src,
       MAX(CASE WHEN source='manual' THEN detail    END) manual_src
-    FROM obs WHERE field_id = ? AND date >= ?
-    GROUP BY date ORDER BY date`).all(fieldId, since);
+    FROM obs WHERE field_id = ? AND date BETWEEN ? AND ?
+    GROUP BY date ORDER BY date`).all(fieldId, since, until);
 
   const ex = excludedSources(fieldId);
   if (ex.size) for (const r of rows) {
@@ -113,8 +113,9 @@ function series(fieldId, since) {
     for (const v of db.prepare(`SELECT so.network, so.station_id, so.date, so.precip_in
       FROM station_obs so
       JOIN field_station fs ON fs.network = so.network AND fs.station_id = so.station_id
-      WHERE fs.field_id = ? AND fs.excluded = 0 AND so.date >= ? AND so.precip_in IS NOT NULL`)
-      .all(fieldId, since)) {
+      WHERE fs.field_id = ? AND fs.excluded = 0 AND so.date BETWEEN ? AND ?
+        AND so.precip_in IS NOT NULL`)
+      .all(fieldId, since, until)) {
       const id = `${v.network}|${v.station_id}`;
       if (!want.has(id)) continue;
       let r = byDate.get(v.date);
@@ -181,7 +182,7 @@ function csv(fields, from, to) {
   const farms = Object.fromEntries(cfg.fields.map(f => [f.id, f.farm ?? '']));
   const lines = ['field_id,field_name,farm,date,gauge_in,manual_in,rfcqpe_4km_in,mrms_in,prism_in,iemre_in,gauge_station,manual_gauge'];
   for (const id of fields) {
-    for (const r of series(id, from).filter(r => r.date <= to)) {
+    for (const r of series(id, from, to)) {
       const q = v => (v === null || v === undefined ? '' : v);
       lines.push([id, csvq(names[id]), csvq(farms[id]), r.date,
         q(r.gauge), q(r.manual), q(r.rfcqpe), q(r.mrms), q(r.prism), q(r.iemre),
@@ -451,15 +452,27 @@ const server = createServer(async (req, res) => {
       });
     }
     if (p === '/api/series') {
-      const days = Math.min(Number(url.searchParams.get('days')) || 60, 3000);
-      const field = url.searchParams.get('field');
+      const q = url.searchParams;
+      const field = q.get('field');
+      // An explicit window, so the same endpoint can serve last year's slice of
+      // the calendar for the comparison overlay. `days` still works on its own,
+      // which is what "Last 30 days" and any older bookmark ask for.
+      const days = Math.min(Number(q.get('days')) || 60, 3000);
+      const to = isIsoDate(q.get('to')) ? q.get('to') : today();
+      const from = isIsoDate(q.get('from')) ? q.get('from') : addDays(to, -days);
       const all = fieldGauges(field);
       // The cap is reported, not silently applied: a gauge that counts towards
       // the field's figure but has no line of its own has to say so.
       return json(res, {
-        rows: series(field, addDays(today(), -days)),
+        from, to,
+        rows: from <= to ? series(field, from, to) : [],
         gauges: all.slice(0, GAUGE_SLOTS),
         uncharted: all.slice(GAUGE_SLOTS).map(g => g.name),
+        // Which years the comparison picker can offer for this field. Offering
+        // a year with nothing in it would draw an empty overlay and leave the
+        // reader deciding whether that means "dry" or "not collecting yet".
+        years: db.prepare(`SELECT DISTINCT substr(date, 1, 4) y FROM obs
+          WHERE field_id = ? ORDER BY y DESC`).all(field).map(r => r.y),
       });
     }
     if (p === '/api/summary') return json(res, { summaries: cfg.fields.map(f => summary(f.id)) });

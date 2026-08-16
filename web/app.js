@@ -61,11 +61,49 @@ const mi = km => `${(km * MI_PER_KM).toFixed(1)} mi`;
 const has = v => v !== null && v !== undefined;
 const mdy = d => { const [y, m, dd] = d.split('-'); return `${+m}/${+dd}`; };
 
+/* ---------- local-calendar dates, same convention as src/util.js ---------- */
+// Built from local components on purpose: a 6pm storm belongs to the day it
+// fell on here, not to whatever UTC calls that instant.
+const isoLocal = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const todayIso = () => isoLocal(new Date());
+const addDaysIso = (iso, n) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return isoLocal(new Date(y, m - 1, d + n));
+};
+const daysBetweenIso = (a, b) => {
+  const [[ya, ma, da], [yb, mb, dbb]] = [a, b].map(s => s.split('-').map(Number));
+  return Math.round((new Date(yb, mb - 1, dbb) - new Date(ya, ma - 1, da)) / 86400000);
+};
+/**
+ * Same month and day, n years off — string surgery, not date arithmetic.
+ * `new Date` would roll February 29th to March 1st and widen the window by a
+ * day without saying so; the last day of February is the honest answer.
+ *
+ * The clamp is not cosmetic: `isIsoDate()` on the server rejects `2027-02-29`
+ * as the non-date it is and quietly falls back to a default window, so a range
+ * bound that lands on a leap day would silently compare the wrong dates. It can
+ * only happen within a month of February 29th of a leap year, which is exactly
+ * the kind of bug that waits four years to be found.
+ */
+const shiftYears = (iso, n) => {
+  const y = Number(iso.slice(0, 4)) + n;
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  return `${y}-${iso.slice(5) === '02-29' && !leap ? '02-28' : iso.slice(5)}`;
+};
+/** Alignment key for the overlay: the same square on the calendar. */
+const monthDay = iso => iso.slice(5);
+
 /** Bar with rounded data-end, square against the baseline. */
 function barPath(x, y, w, h, r = 4) {
   if (h <= 0.5) return `M${x} ${y + h} h${w}`;
   const rr = Math.min(r, w / 2, h);
   return `M${x} ${y + h} L${x} ${y + rr} Q${x} ${y} ${x + rr} ${y} L${x + w - rr} ${y} Q${x + w} ${y} ${x + w} ${y + rr} L${x + w} ${y + h} Z`;
+}
+/** The mirror of it: grows down from the baseline, rounded at the bottom end. */
+function barPathDown(x, y, w, h, r = 4) {
+  if (h <= 0.5) return `M${x} ${y} h${w}`;
+  const rr = Math.min(r, w / 2, h);
+  return `M${x} ${y} L${x} ${y + h - rr} Q${x} ${y + h} ${x + rr} ${y + h} L${x + w - rr} ${y + h} Q${x + w} ${y + h} ${x + w} ${y + h - rr} L${x + w} ${y} Z`;
 }
 function niceTicks(max, count = 4) {
   if (max <= 0) return { top: 1, ticks: [0, 0.5, 1] };
@@ -88,26 +126,76 @@ function showTip(evt, title, rows, note) {
 }
 const hideTip = () => { tip.hidden = true; };
 
-function legendInto(node, items, notes = {}) {
+function legendInto(node, items, notes = {}, extra = '') {
   node.innerHTML = items.map(s =>
     `<span class="item"><span class="swatch" style="background:${s.color}"></span>${esc(s.label)}`
     // Only the gauges carry their note into the legend — which network and how
     // far out — because that is what tells two station names apart. The gridded
     // sources are described in the card's own text.
     + (s.gauge ? ` <span class="none">${esc(s.note)}</span>` : '')
-    + (notes[s.key] ? ` <span class="none">${esc(notes[s.key])}</span>` : '') + '</span>').join('');
+    + (notes[s.key] ? ` <span class="none">${esc(notes[s.key])}</span>` : '') + '</span>').join('') + extra;
+}
+
+/** One place for the comparison year's two non-hue signals. */
+const CMP_FADE = 0.55;
+const CMP_DASH = '7 4';
+
+/**
+ * How the two years are told apart, spelled out beside the series.
+ *
+ * The year rides on position (above or below the baseline) and stroke form
+ * (solid or dashed) — never on a second set of hues. One of the people reading
+ * this is colourblind, and "the same source, the other year" is exactly the
+ * pairing a shifted hue destroys: shift it far enough to be visible and the two
+ * stop reading as the same series; keep it close and it is invisible. Position
+ * and dash survive any vision, any print, and forced-colors mode.
+ *
+ * The glyphs wear the legend's own ink, not a series colour — identity is
+ * already carried by the swatches above; this key is about form.
+ */
+function yearKeyHtml(kind, curYear, cmpYear) {
+  const rule = dash => `<svg class="ykey" viewBox="0 0 24 14" aria-hidden="true"><path d="M1 7h22" fill="none"
+    stroke="currentColor" stroke-width="2" stroke-linecap="round"${dash ? ` stroke-dasharray="${dash}"` : ''}/></svg>`;
+  // The baseline wears the legend's own ink at half strength rather than
+  // --axis: at 14px the axis grey disappears into the card in dark mode, and
+  // without the line there is nothing for "above" and "below" to be relative to.
+  const bar = down => `<svg class="ykey" viewBox="0 0 24 14" aria-hidden="true"><path d="M1 7h22"
+    stroke="currentColor" stroke-width="1" opacity="0.45"/><rect x="8" y="${down ? 7 : 1}" width="8" height="6"
+    rx="2" fill="currentColor"${down ? ` opacity="${CMP_FADE}"` : ''}/></svg>`;
+  const item = (glyph, label) => `<span class="item">${glyph}${label}</span>`;
+  return kind === 'bars'
+    ? item(bar(false), `${curYear} above`) + item(bar(true), `${cmpYear} below`)
+    : item(rule(), curYear) + item(rule(CMP_DASH), cmpYear);
 }
 
 /* ---------- Chart 1: daily rainfall, grouped bars ---------- */
-function drawDaily(svg, rows, binLabel) {
-  const W = 1100, H = 300, m = { t: 14, r: 16, b: 34, l: 44 };
+/**
+ * `cmp` — `{ cur, prev }`, the two years — mirrors the comparison year below
+ * the baseline rather than squeezing a second bar into every day's slot.
+ *
+ * Pairing the bars sideways would halve a width that is already under two
+ * pixels at 90 days with seven series, and the only channel left to mark the
+ * year with would have been colour. Up versus down costs no width and is
+ * readable by anyone. It also puts each pair back to back, which is the
+ * comparison — "more or less than the same day last year" is one glance at
+ * which side of the line is longer.
+ */
+function drawDaily(svg, rows, binLabel, cmp) {
+  const W = 1100, H = cmp ? 430 : 300;
+  const m = { t: 14, r: cmp ? 56 : 16, b: 34, l: 44 };
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.replaceChildren();
   if (!rows.length) return;
 
-  const max = Math.max(0.1, ...rows.flatMap(r => SERIES.map(s => r[s.key] ?? 0)));
+  // One scale for both halves: a bar above and a bar below are the same inches
+  // per pixel, or the chart would be inventing the comparison it is drawing.
+  const max = Math.max(0.1, ...rows.flatMap(r =>
+    SERIES.flatMap(s => [r[s.key] ?? 0, cmp ? (r[`c:${s.key}`] ?? 0) : 0])));
   const { top, ticks } = niceTicks(max);
-  const y = v => m.t + ph - (v / top) * ph;
+  const half = cmp ? ph / 2 : ph;
+  const base = m.t + half;                 // mid-plot when comparing, the floor otherwise
+  const y = v => base - (v / top) * half;
+  const yDown = v => base + (v / top) * half;
   const gw = pw / rows.length;
   // Slot the bars rather than sizing them and hoping. The old form subtracted a
   // fixed 2px gap and clamped the remainder, so once the group got tight the
@@ -118,10 +206,20 @@ function drawDaily(svg, rows, binLabel) {
   const bw = Math.max(0.8, slot - Math.min(2, slot * 0.3));  // surface gap between adjacent bars
 
   for (const t of ticks) {
-    svg.append(el('line', { class: 'grid-line', x1: m.l, x2: m.l + pw, y1: y(t), y2: y(t) }));
-    svg.append(el('text', { class: 'tick', x: m.l - 8, y: y(t) + 4, 'text-anchor': 'end' }, [t.toFixed(2)]));
+    // Below the line the ticks count away from zero again — the mirrored half is
+    // the same positive inches, not a negative quantity.
+    for (const gy of cmp && t > 0 ? [y(t), yDown(t)] : [y(t)]) {
+      svg.append(el('line', { class: 'grid-line', x1: m.l, x2: m.l + pw, y1: gy, y2: gy }));
+      svg.append(el('text', { class: 'tick', x: m.l - 8, y: gy + 4, 'text-anchor': 'end' }, [t.toFixed(2)]));
+    }
   }
-  svg.append(el('line', { class: 'axis-line', x1: m.l, x2: m.l + pw, y1: y(0), y2: y(0) }));
+  svg.append(el('line', { class: 'axis-line', x1: m.l, x2: m.l + pw, y1: base, y2: base }));
+  if (cmp) {
+    // Which side is which year, said on the chart itself rather than only in the
+    // legend — the reader is looking at the bars, not back up at the card head.
+    svg.append(el('text', { class: 'dlabel', x: m.l + pw + 8, y: base - 6 }, [cmp.cur]));
+    svg.append(el('text', { class: 'dlabel', x: m.l + pw + 8, y: base + 15, opacity: 0.75 }, [cmp.prev]));
+  }
 
   const every = Math.max(1, Math.ceil(rows.length / 14));
   rows.forEach((r, i) => {
@@ -130,19 +228,25 @@ function drawDaily(svg, rows, binLabel) {
     svg.append(band);
 
     SERIES.forEach((s, si) => {
-      const v = r[s.key];
-      if (!has(v)) return;
       const bx = gx + 2 + si * slot;
-      svg.append(el('path', { d: barPath(bx, y(v), bw, y(0) - y(v)), fill: s.color }));
+      const v = r[s.key];
+      if (has(v)) svg.append(el('path', { d: barPath(bx, y(v), bw, base - y(v)), fill: s.color }));
+      const p = cmp ? r[`c:${s.key}`] : null;
+      // Faded as well as mirrored: this year is the one being read, last year is
+      // the reference behind it. The fade is a third signal, never the only one.
+      if (has(p)) svg.append(el('path', {
+        d: barPathDown(bx, base, bw, yDown(p) - base), fill: s.color, opacity: CMP_FADE,
+      }));
     });
 
     band.addEventListener('mousemove', e => {
       band.classList.add('on');
       // Each gauge names itself here, so the old "which station did this figure
       // come from" footnote has nothing left to explain.
-      showTip(e, r.date, SERIES.map(s => ({
+      showTip(e, cmp ? `${r.date} vs ${r.cdate ?? '—'}` : r.date, SERIES.map(s => ({
         k: `<span class="dot" style="background:${s.color}"></span>${esc(s.label)}`,
-        v: has(r[s.key]) ? `${fmt(r[s.key])}"` : 'no report',
+        v: (has(r[s.key]) ? `${fmt(r[s.key])}"` : 'no report')
+          + (cmp ? ` <span class="prev">${has(r[`c:${s.key}`]) ? `${fmt(r[`c:${s.key}`])}"` : 'no report'}</span>` : ''),
       })));
     });
     band.addEventListener('mouseleave', () => { band.classList.remove('on'); hideTip(); });
@@ -154,9 +258,18 @@ function drawDaily(svg, rows, binLabel) {
 }
 
 /* ---------- Chart 2: cumulative lines ---------- */
-function drawCumulative(svg, rows) {
-  // Right margin holds the direct end-labels, which are mandatory at 4 series.
-  const W = 1100, H = 280, m = { t: 14, r: 124, b: 34, l: 44 };
+/**
+ * `cmp` — `{ cur, prev }` — overlays the comparison year directly rather than
+ * shifting it. Two cumulative lines that start from the same zero on the same
+ * day of the calendar are meant to be read against each other, and the gap
+ * between them at any point *is* the answer; moving one sideways would turn
+ * that gap into a lie. The year is carried by the dash, the same hue per source
+ * on both, so a source is still one colour across both years.
+ */
+function drawCumulative(svg, rows, cmp) {
+  // Right margin holds the direct end-labels, which are mandatory at 4 series —
+  // and carry both years' totals when comparing, so they need more room.
+  const W = 1100, H = 280, m = { t: 14, r: cmp ? 168 : 124, b: 34, l: 44 };
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.replaceChildren();
   if (!rows.length) return;
@@ -166,16 +279,17 @@ function drawCumulative(svg, rows) {
   // archive — as a flat zero across the whole range, which reads as "measured
   // nothing" rather than "wasn't collecting yet".
   const cum = {}, from = {};
-  for (const s of SERIES) {
-    const start = rows.findIndex(r => has(r[s.key]));
-    if (start < 0) continue;
-    from[s.key] = start;
+  const run = key => {
+    const start = rows.findIndex(r => has(r[key]));
+    if (start < 0) return;
+    from[key] = start;
     let a = 0;
-    cum[s.key] = rows.slice(start).map(r => (a += r[s.key] ?? 0));
-  }
-  const drawn = SERIES.filter(s => cum[s.key]);
+    cum[key] = rows.slice(start).map(r => (a += r[key] ?? 0));
+  };
+  for (const s of SERIES) { run(s.key); if (cmp) run(`c:${s.key}`); }
+  const drawn = SERIES.filter(s => cum[s.key] || (cmp && cum[`c:${s.key}`]));
   if (!drawn.length) return;
-  const max = Math.max(0.1, ...drawn.map(s => cum[s.key].at(-1)));
+  const max = Math.max(0.1, ...Object.values(cum).map(c => c.at(-1)));
   const { top, ticks } = niceTicks(max);
   const x = i => m.l + (rows.length === 1 ? pw / 2 : (i / (rows.length - 1)) * pw);
   const y = v => m.t + ph - (v / top) * ph;
@@ -186,16 +300,32 @@ function drawCumulative(svg, rows) {
   }
   svg.append(el('line', { class: 'axis-line', x1: m.l, x2: m.l + pw, y1: y(0), y2: y(0) }));
 
+  const path = (key, color, dash) => el('path', {
+    d: cum[key].map((v, i) => `${i ? 'L' : 'M'}${x(i + from[key]).toFixed(1)} ${y(v).toFixed(1)}`).join(' '),
+    fill: 'none', stroke: color, 'stroke-width': 2,
+    'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+    'stroke-dasharray': dash ? CMP_DASH : null, opacity: dash ? 0.85 : null,
+  });
+
+  // Last year underneath: this year is the line being read, and where the two
+  // run together the solid one should be the one on top.
+  if (cmp) for (const s of drawn) if (cum[`c:${s.key}`]) {
+    svg.append(path(`c:${s.key}`, s.color, true));
+    // Hollow end-marker against this year's filled one — the same solid/outline
+    // pairing the dash makes, at the point the eye actually lands on.
+    svg.append(el('circle', {
+      cx: x(rows.length - 1), cy: y(cum[`c:${s.key}`].at(-1)), r: 4,
+      fill: 'var(--surface-1)', stroke: s.color, 'stroke-width': 2,
+    }));
+  }
+
   const ends = [];
   for (const s of drawn) {
-    const off = from[s.key];
-    svg.append(el('path', {
-      d: cum[s.key].map((v, i) => `${i ? 'L' : 'M'}${x(i + off).toFixed(1)} ${y(v).toFixed(1)}`).join(' '),
-      fill: 'none', stroke: s.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
-    }));
+    if (!cum[s.key]) continue;
+    svg.append(path(s.key, s.color, false));
     const last = cum[s.key].at(-1);
     svg.append(el('circle', { cx: x(rows.length - 1), cy: y(last), r: 4, fill: s.color, stroke: 'var(--surface-1)', 'stroke-width': 2 }));
-    ends.push({ s, last, at: y(last) });
+    ends.push({ s, last, prev: cmp ? cum[`c:${s.key}`]?.at(-1) ?? null : null, at: y(last) });
   }
 
   // Direct labels at the line ends — identity without relying on the legend
@@ -210,10 +340,13 @@ function drawCumulative(svg, rows) {
   if (over > 0) for (const e of ends) e.y -= over;
   for (const e of ends) {
     // The margin holds roughly this much text; a COOP station name can be far
-    // longer than the label slot, and the legend spells it out in full.
-    const name = e.s.label.length > 13 ? `${e.s.label.slice(0, 12)}…` : e.s.label;
+    // longer than the label slot, and the legend spells it out in full. Both
+    // years share one label rather than getting one each: fourteen end-labels
+    // on a 230px plot is not a label layer, it is a wall.
+    const cap = cmp ? 11 : 13;
+    const name = e.s.label.length > cap ? `${e.s.label.slice(0, cap - 1)}…` : e.s.label;
     svg.append(el('text', { class: 'dlabel', x: x(rows.length - 1) + 10, y: e.y + 4 },
-      [`${name} ${e.last.toFixed(2)}"`]));
+      [`${name} ${e.last.toFixed(2)}"${cmp ? ` (${e.prev === null ? '—' : e.prev.toFixed(2)})` : ''}`]));
   }
 
   const every = Math.max(1, Math.ceil(rows.length / 10));
@@ -229,13 +362,15 @@ function drawCumulative(svg, rows) {
     const i = Math.max(0, Math.min(rows.length - 1,
       Math.round(((e.clientX - bb.left) / bb.width * W - m.l) / pw * (rows.length - 1))));
     cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('opacity', 1);
-    showTip(e, `Through ${rows[i].date}`, drawn.map(s => {
-      const j = i - from[s.key];
-      return {
+    const through = (key, unit) => {
+      const j = i - from[key];
+      return !cum[key] || j < 0 ? 'not collecting yet' : `${cum[key][j].toFixed(2)}${unit}`;
+    };
+    showTip(e, cmp ? `Through ${rows[i].date} vs ${rows[i].cdate ?? '—'}` : `Through ${rows[i].date}`,
+      drawn.map(s => ({
         k: `<span class="dot" style="background:${s.color}"></span>${esc(s.label)}`,
-        v: j < 0 ? 'not collecting yet' : `${cum[s.key][j].toFixed(2)}"`,
-      };
-    }));
+        v: through(s.key, '"') + (cmp ? ` <span class="prev">${through(`c:${s.key}`, '"')}</span>` : ''),
+      })));
   });
   hit.addEventListener('mouseleave', () => { cross.setAttribute('opacity', 0); hideTip(); });
 }
@@ -289,17 +424,51 @@ function hbarPath(x, y, w, h, r = 4) {
 }
 
 /* ---------- weekly binning for long ranges ---------- */
-function binWeekly(rows) {
+/** `keys` covers the comparison columns too, and the weeks line up because both
+ *  years were merged onto one row per calendar day before binning. */
+function binWeekly(rows, keys) {
   const out = [];
   for (let i = 0; i < rows.length; i += 7) {
-    const chunk = rows.slice(i, i + 7), o = { date: chunk[0].date, end: chunk.at(-1).date };
-    for (const s of SERIES) {
-      const vals = chunk.map(r => r[s.key]).filter(has);
-      o[s.key] = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) * 100) / 100 : null;
+    const chunk = rows.slice(i, i + 7);
+    // First day of the week that found a counterpart, not the first day of the
+    // week: early in a range the other year may not have started collecting yet,
+    // and a blank there would read as a broken tooltip rather than a gap.
+    const o = { date: chunk[0].date, end: chunk.at(-1).date, cdate: chunk.find(r => r.cdate)?.cdate };
+    for (const k of keys) {
+      const vals = chunk.map(r => r[k]).filter(has);
+      o[k] = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) * 100) / 100 : null;
     }
     out.push(o);
   }
   return out;
+}
+
+/* ---------- year-over-year comparison ---------- */
+
+/**
+ * Fold last year's rows onto this year's, matched by month and day.
+ *
+ * Matching on the calendar square rather than on position in the array is what
+ * makes a leap year behave: February 29th simply has no counterpart and stays
+ * missing, in both directions, instead of shunting every later day one place
+ * out of step. The dates that found no partner are returned so the note can own
+ * up to them — a quarter inch that fell on the 29th of February is not nothing,
+ * and neither is a day this year that nothing was collected for.
+ *
+ * Safe because no range offered here exceeds a year, so a month-day appears at
+ * most once on each side.
+ */
+function mergeCompare(rows, prev, keys) {
+  const by = new Map(prev.map(r => [monthDay(r.date), r]));
+  const matched = new Set();
+  for (const r of rows) {
+    const p = by.get(monthDay(r.date));
+    if (!p) continue;
+    matched.add(p.date);
+    r.cdate = p.date;
+    for (const k of keys) r[`c:${k}`] = p[k] ?? null;
+  }
+  return prev.filter(p => !matched.has(p.date)).map(p => p.date);
 }
 
 /* ---------- app ---------- */
@@ -433,18 +602,67 @@ function wireCoordPaste(form) {
   });
 }
 
+/**
+ * The window the charts cover, as two dates.
+ *
+ * "Year to date" is the one range whose length changes as the year runs, which
+ * is exactly why it is worth having: in August it is the number anyone actually
+ * argues about, and a fixed 30/90/365 never lands on January 1st.
+ */
+function rangeWindow() {
+  const v = $('rangeSel').value;
+  const to = todayIso();
+  return v === 'ytd'
+    ? { from: `${to.slice(0, 4)}-01-01`, to }
+    : { from: addDaysIso(to, -Number(v)), to };
+}
+
+/** Keep the comparison picker's options in step with what the field has, without
+ *  dropping a selection the reader made. */
+function refreshCompareSelect(years, cur) {
+  const sel = $('cmpSel');
+  const want = sel.value;
+  const opts = (years ?? []).filter(y => y !== cur);
+  sel.innerHTML = '<option value="">No comparison</option>'
+    + opts.map(y => `<option value="${y}">${y}</option>`).join('');
+  sel.value = opts.includes(want) ? want : '';
+  return sel.value;
+}
+
 async function load() {
   const fieldId = $('fieldSel').value;
-  const days = Number($('rangeSel').value);
-  const [{ rows, gauges, uncharted }, { summaries }, cal] = await Promise.all([
-    fetch(`/api/series?field=${fieldId}&days=${days}`).then(r => r.json()),
+  const { from, to } = rangeWindow();
+  const days = daysBetweenIso(from, to);
+  // Read before the fetch so both years go out together; the option list is
+  // reconciled against the answer afterwards.
+  const cmpYear = $('cmpSel').value;
+  const shift = cmpYear ? Number(cmpYear) - Number(to.slice(0, 4)) : 0;
+  const [{ rows, gauges, uncharted, years }, cmpRes, { summaries }, cal] = await Promise.all([
+    fetch(`/api/series?field=${fieldId}&from=${from}&to=${to}`).then(r => r.json()),
+    cmpYear
+      ? fetch(`/api/series?field=${fieldId}&from=${shiftYears(from, shift)}&to=${shiftYears(to, shift)}`)
+        .then(r => r.json())
+      : null,
     fetch('/api/summary').then(r => r.json()),
     fetch('/api/calibration').then(r => r.json()),
   ]);
+  const curYear = to.slice(0, 4);
+  const picked = refreshCompareSelect(years, curYear);
+  // The picker can lose the selection when the field changes — a field added
+  // last spring has no 2024. Nothing is drawn for a year that is not offered.
+  const cmp = picked && picked === cmpYear && cmpRes?.rows?.length
+    ? { cur: curYear, prev: cmpYear } : null;
+  // The picker offers a year the field has *some* data for, which is not the
+  // same as data for these dates — a field added in June has a 2024, just not a
+  // February. Saying so beats an overlay that silently does not appear.
+  const cmpEmpty = picked && !cmp;
   // Scoped to the field on screen: its gauges, in its order. A field with no
   // gauge in range draws the gridded sources and nothing else, rather than a
   // permanent "no data yet" for a gauge it does not have.
   SERIES = [...gaugeSeries(gauges ?? []), ...GRID_SERIES];
+  // Last year folded onto this year's rows, so the charts, the tooltips and the
+  // table all read one row per calendar day carrying both years.
+  const missed = cmp ? mergeCompare(rows, cmpRes.rows, SERIES.map(s => s.key)) : [];
   const me = summaries.find(s => s.field_id === fieldId) ?? {};
   const field = META.fields.find(f => f.id === fieldId);
 
@@ -483,11 +701,21 @@ async function load() {
        <div class="meta">last measurable ≥ 0.01"</div></div>`;
 
   const weekly = days > 120;
-  const chartRows = weekly ? binWeekly(rows) : rows;
+  const keys = SERIES.flatMap(s => (cmp ? [s.key, `c:${s.key}`] : [s.key]));
+  const chartRows = weekly ? binWeekly(rows, keys) : rows;
   const rfcFrom = rows.find(r => has(r.rfcqpe))?.date;
   $('dailyNote').textContent = (weekly
     ? 'Weekly totals. A blank slot means nothing reported for that week. '
     : 'One bar per series per day. A missing bar means that one reported nothing — not that it stayed dry. ')
+    + (cmp
+        ? `${cmp.cur} is drawn above the line and ${cmp.prev} below it, same colour per source and the same scale on both halves, so the longer side is the wetter year. Matched by month and day. `
+        : '')
+    + (cmpEmpty
+        ? `Nothing is drawn for ${picked}: this field has no readings between ${shiftYears(from, shift)} and ${shiftYears(to, shift)}. `
+        : '')
+    + (missed.length
+        ? `${missed.length === 1 ? `${missed[0]} is` : `${missed.length} days in ${cmp.prev} are`} left out — nothing on this year's side of the calendar to line up with (February 29th, or a day this field has no row for). `
+        : '')
     + 'Each gauge is drawn on its own; where two of them disagree, that is two readings of two different pieces of ground, not an error. '
     + 'PRISM and RFC QPE both run on a 12Z–12Z day, so a single storm can land on either side of midnight local; compare those over a week, not a day. '
     + (rfcFrom
@@ -504,10 +732,15 @@ async function load() {
     if (i > 0) starts[s.key] = `from ${mdy(rows[i].date)}`;
     else if (i < 0) starts[s.key] = 'no data yet';
   }
-  legendInto($('legendDaily'), SERIES, starts);
-  legendInto($('legendCum'), SERIES, starts);
-  drawDaily($('chartDaily'), chartRows, weekly ? (d => mdy(d)) : mdy);
-  drawCumulative($('chartCum'), rows);
+  legendInto($('legendDaily'), SERIES, starts, cmp ? yearKeyHtml('bars', cmp.cur, cmp.prev) : '');
+  legendInto($('legendCum'), SERIES, starts, cmp ? yearKeyHtml('lines', cmp.cur, cmp.prev) : '');
+  drawDaily($('chartDaily'), chartRows, weekly ? (d => mdy(d)) : mdy, cmp);
+  drawCumulative($('chartCum'), rows, cmp);
+  $('cumNote').textContent = cmp
+    ? `Both years accumulate from the same day of the calendar, so the vertical gap between a solid line and its dashed twin is how far ahead or behind ${cmp.cur} is running. `
+      + 'Day-level binning differences wash out over a range like this, so a gap that keeps widening is a real disagreement about this field.'
+    : 'Accumulates across the range chosen above, not the whole season. This is the honest way to compare sources — day-level binning differences wash out, '
+      + 'so a gap that keeps widening is a real disagreement about this field. Two gauges drifting apart over a month is the clearest reading you get of how much a few miles matters here.';
   const shown = visibleFields();
   const scope = farmSel.size ? ` ${shown.length} of ${META.fields.length} fields shown for the selected farm${farmSel.size > 1 ? 's' : ''}.` : '';
   $('fieldsNote').textContent = `Radar QPE totals since ${META.seasonStart}. Selected field highlighted.${scope}`;
@@ -544,12 +777,19 @@ async function load() {
   // Every gauge is its own column now, so the old "Gauge station" column —
   // which named whichever one the derived figure had fallen through to that
   // day — has nothing left to say.
-  $('dataTable').querySelector('thead').innerHTML =
-    `<tr><th>Date</th>${SERIES.map(s =>
-      `<th><span class="dot" style="background:${s.color}"></span>${esc(s.label)}</th>`).join('')}</tr>`;
+  // The comparison year gets columns here too. A dashed line and a mirrored bar
+  // are both readable, but "how much exactly, on that one day" is a number, and
+  // the table is the one place every value on the charts is also written down.
+  const cell = v => (has(v) ? `<td>${v.toFixed(2)}</td>` : '<td class="none">—</td>');
+  $('dataTable').querySelector('thead').innerHTML = cmp
+    ? `<tr><th rowspan="2">Date</th>${SERIES.map(s =>
+        `<th colspan="2"><span class="dot" style="background:${s.color}"></span>${esc(s.label)}</th>`).join('')}</tr>`
+      + `<tr>${SERIES.map(() => `<th>${cmp.cur}</th><th class="prev">${cmp.prev}</th>`).join('')}</tr>`
+    : `<tr><th>Date</th>${SERIES.map(s =>
+        `<th><span class="dot" style="background:${s.color}"></span>${esc(s.label)}</th>`).join('')}</tr>`;
   $('dataTable').querySelector('tbody').innerHTML = [...rows].reverse().map(r =>
     `<tr><td>${r.date}</td>${SERIES.map(s =>
-      has(r[s.key]) ? `<td>${r[s.key].toFixed(2)}</td>` : '<td class="none">—</td>').join('')}</tr>`).join('');
+      cell(r[s.key]) + (cmp ? cell(r[`c:${s.key}`]) : '')).join('')}</tr>`).join('');
 
   renderExclusions(field);
   renderFields();
@@ -777,10 +1017,8 @@ function exportQuery() {
 }
 
 function wireExport() {
-  const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const now = new Date(), back = new Date(now); back.setDate(back.getDate() - 14);
-  $('exportForm').to.value = iso(now);
-  $('exportForm').from.value = iso(back);
+  $('exportForm').to.value = todayIso();
+  $('exportForm').from.value = addDaysIso(todayIso(), -14);
   renderExportSources();
 
   const download = path => {
@@ -1269,9 +1507,7 @@ function renderFields() {
   wireStation();
   wireJobs();
   wireUpdates();
-  const now = new Date();
-  $('addReading').date.value =
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  $('addReading').date.value = todayIso();
   $('addReading').date.max = $('addReading').date.value;
   await renderGauges();
 
@@ -1279,6 +1515,7 @@ function renderFields() {
   refreshFieldSelect();
   $('fieldSel').addEventListener('change', load);
   $('rangeSel').addEventListener('change', load);
+  $('cmpSel').addEventListener('change', load);
   $('themeBtn').addEventListener('click', () => {
     const cur = document.documentElement.getAttribute('data-theme');
     const next = cur === 'dark' ? 'light' : cur === 'light' ? 'dark'

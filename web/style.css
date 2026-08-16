@@ -132,6 +132,9 @@ main { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 16px
 .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--text-secondary); }
 .legend .item { display: inline-flex; align-items: center; gap: 6px; }
 .legend .swatch { width: 10px; height: 10px; border-radius: 3px; }
+/* The year key: which half / which stroke is which year. It describes form, not
+   identity, so its glyphs inherit the legend's ink rather than a series colour. */
+.legend .ykey { width: 24px; height: 14px; flex: none; }
 
 .chart-wrap { width: 100%; overflow: hidden; }
 svg { display: block; width: 100%; height: auto; }
@@ -162,6 +165,10 @@ td.none { color: var(--text-muted); }
 .tooltip .tt-title { font-weight: 600; margin-bottom: 4px; }
 .tooltip .tt-row { display: flex; justify-content: space-between; gap: 14px; }
 .tooltip .tt-row .k { color: var(--text-secondary); }
+/* The comparison year, wherever it sits beside this year's figure: recessive,
+   because this year is the number being read and last year is the reference. */
+.prev { color: var(--text-muted); }
+.tooltip .tt-row .prev { margin-left: 8px; }
 .tooltip .tt-note { color: var(--text-muted); margin-top: 5px; font-size: 11px; }
 
 .fieldform { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 14px; }
