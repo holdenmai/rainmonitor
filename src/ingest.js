@@ -1,10 +1,10 @@
 import { today, addDays, daysBetween } from './util.js';
-import { fetchIemre } from './sources/iemre.js';
+import { fetchIemre, yearChunks } from './sources/iemre.js';
 import { fetchStationYear } from './sources/iemgauge.js';
 import { fetchKsStationRange } from './sources/ksmesonet.js';
 import { fetchOnFarmDaily, fetchOnFarmMonthly } from './sources/weatherlink.js';
 import { identifyPoint, LAYERS } from './sources/rfcqpe.js';
-import { upsertObs, upsertStationObs, upsertStationMonthly, upsertFieldWindow, logIngest, syncFields } from './db.js';
+import { upsertObs, upsertStationObs, upsertStationMonthly, upsertFieldWindow, logIngest, syncFields, transact } from './db.js';
 import { deriveAll } from './derive.js';
 
 const years = (s, e) => {
@@ -32,26 +32,56 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
 
   // --- Gridded: one request per field ---
   if (cfg.sources.iemre?.enabled) {
+    // A year at a time, storing as it goes.
+    //
+    // `fetchIemre` splits at year boundaries internally and hands back one
+    // array, which is right for a ten-day revisit and wrong for a forty-year
+    // backfill: one timeout in 1997 would throw away 1981-1996 as well, having
+    // already spent two minutes fetching them. Driving the chunks from here
+    // means each year is written before the next is asked for, so a failure
+    // costs one year and re-running picks up where it stopped.
+    //
+    // PRISM reaches back to 1981 and IEMRE further still, so this loop is the
+    // difference between one season of history and four decades of it.
     for (const f of fields) {
-      try {
-        const rows = await fetchIemre(f.lat, f.lon, sdate, edate);
-        for (const r of rows) {
-          if (r.mrms !== null) upsertObs(db, f.id, r.date, 'mrms', r.mrms);
-          if (r.prism !== null) upsertObs(db, f.id, r.date, 'prism', r.prism);
-          if (r.iemre !== null) upsertObs(db, f.id, r.date, 'iemre', r.iemre);
+      const chunks = yearChunks(sdate, edate);
+      let got = 0, want = 0, failed = 0, firstError = null;
+      for (const [s, e] of chunks) {
+        const wantChunk = daysBetween(s, e) + 1;
+        want += wantChunk;
+        try {
+          const rows = await fetchIemre(f.lat, f.lon, s, e);
+          transact(db, () => {
+            for (const r of rows) {
+              // Missing stays missing: MRMS does not exist before ~2014 and
+              // PRISM not before 1981, and a `0` there would be a confident
+              // claim that a decade was bone dry.
+              if (r.mrms !== null) upsertObs(db, f.id, r.date, 'mrms', r.mrms);
+              if (r.prism !== null) upsertObs(db, f.id, r.date, 'prism', r.prism);
+              if (r.iemre !== null) upsertObs(db, f.id, r.date, 'iemre', r.iemre);
+            }
+          });
+          got += rows.length;
+          // Guard against silent upstream truncation: these feeds have returned
+          // HTTP 200 with a near-empty body rather than an error. A short result
+          // is reported loudly instead of quietly becoming a dry year.
+          if (rows.length < wantChunk * 0.9) {
+            failed++;
+            firstError ??= `${s.slice(0, 4)}: got ${rows.length}/${wantChunk} days`;
+            log(`  [grid] ${f.name} ${s.slice(0, 4)}: ${rows.length}/${wantChunk} days  <-- WARNING: upstream returned short`);
+          } else if (chunks.length > 1) {
+            log(`  [grid] ${f.name} ${s.slice(0, 4)}: ${rows.length} days`);
+          }
+        } catch (err) {
+          failed++;
+          firstError ??= `${s.slice(0, 4)}: ${err.message}`;
+          log(`  [grid] ${f.name} ${s.slice(0, 4)}: FAILED ${err.message}`);
         }
-        // Guard against silent upstream truncation: these feeds have returned
-        // HTTP 200 with a near-empty body rather than an error. A short result
-        // is reported loudly instead of quietly becoming a dry year.
-        const want = daysBetween(sdate, edate) + 1;
-        const short = rows.length < want * 0.9;
-        logIngest(db, `iemre:${f.id}`, !short, rows.length, short ? `got ${rows.length}/${want} days` : null);
-        log(`  [grid] ${f.name}: ${rows.length} days` +
-            (short ? `  <-- WARNING: expected ~${want}, upstream returned short` : ''));
-      } catch (e) {
-        logIngest(db, `iemre:${f.id}`, false, 0, e.message);
-        log(`  [grid] ${f.name}: FAILED ${e.message}`);
       }
+      const note = failed ? `${failed}/${chunks.length} year(s) incomplete — ${firstError}` : null;
+      logIngest(db, `iemre:${f.id}`, !failed, got, note);
+      log(`  [grid] ${f.name}: ${got}/${want} days across ${chunks.length} year(s)`
+          + (failed ? `  <-- ${failed} incomplete, re-run to fill the gaps` : ''));
     }
   }
 

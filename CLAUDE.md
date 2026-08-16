@@ -186,8 +186,21 @@ framework and no bundler — it is served as-is.
   dashed, in the same colour per source. One of the readers is colourblind, so a
   shifted or faded hue is not available: shift it far enough to see and the two
   years stop reading as the same series. The fade (`CMP_FADE`) is a third signal
-  on top of position, never the only one. Ranges never exceed a year, which is
-  what makes month-day a unique key.
+  on top of position, never the only one. **The picker is disabled above a
+  366-day range** (`overAYear` in `load()`) — month-day stops being a unique key
+  the moment a window can hold the same calendar square twice, so this is a
+  correctness limit, not a missing feature.
+- **History goes back to 1981, and the sources stop at different depths.**
+  Verified 2026-08-15 against the farm's own coordinates: PRISM returns a value
+  for every day from 1981; IEMRE reaches at least to 1950; MRMS is modern only
+  (~2014). `ingest()` drives `yearChunks()` itself rather than letting
+  `fetchIemre` concatenate, so each year is written before the next is asked
+  for — a forty-year backfill that dies in 1997 keeps 1981-1996 and re-running
+  resumes. Absent sources stay `null`: a `0` before 2014 would be a confident
+  claim that a decade was bone dry. Charts bin by span — day / week / calendar
+  month / calendar year (`binFor`) — and the cumulative chart spaces points by
+  position rather than date, so `load()` names any year with no rows instead of
+  drawing the gap closed.
 - **The series palette is validated per prefix, not once.** A field draws a
   different number of gauge series, so `--series-g1..g4` followed by rfcqpe /
   prism / mrms was ordered so that *every* prefix clears the adjacent-pair CVD

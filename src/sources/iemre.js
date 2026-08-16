@@ -19,7 +19,7 @@ const BASE = 'https://mesonet.agron.iastate.edu/api/1/iemre/multiday.json';
  * 2026-08-07. Without this split a year-long backfill silently records ~0.5 in
  * of annual rainfall instead of ~18 in, and nothing anywhere reports a failure.
  */
-function yearChunks(sdate, edate) {
+export function yearChunks(sdate, edate) {
   const out = [];
   let s = sdate;
   while (s <= edate) {

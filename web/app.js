@@ -93,6 +93,15 @@ const shiftYears = (iso, n) => {
 /** Alignment key for the overlay: the same square on the calendar. */
 const monthDay = iso => iso.slice(5);
 
+/**
+ * First year PRISM exists. Verified 2026-08-15 against the farm's own
+ * coordinates: 1950 returns rows with a null PRISM column, 1981 and later
+ * return real numbers for every day. IEMRE goes back further, but PRISM is the
+ * one that tracks this farm's gauge closely enough to be worth reading as
+ * history, so it is what "all history" is scaled to.
+ */
+const PRISM_FROM = 1981;
+
 /** Bar with rounded data-end, square against the baseline. */
 function barPath(x, y, w, h, r = 4) {
   if (h <= 0.5) return `M${x} ${y + h} h${w}`;
@@ -266,7 +275,7 @@ function drawDaily(svg, rows, binLabel, cmp) {
  * that gap into a lie. The year is carried by the dash, the same hue per source
  * on both, so a source is still one colour across both years.
  */
-function drawCumulative(svg, rows, cmp) {
+function drawCumulative(svg, rows, cmp, binLabel = mdy) {
   // Right margin holds the direct end-labels, which are mandatory at 4 series —
   // and carry both years' totals when comparing, so they need more room.
   const W = 1100, H = 280, m = { t: 14, r: cmp ? 168 : 124, b: 34, l: 44 };
@@ -351,7 +360,7 @@ function drawCumulative(svg, rows, cmp) {
 
   const every = Math.max(1, Math.ceil(rows.length / 10));
   rows.forEach((r, i) => { if (i % every === 0)
-    svg.append(el('text', { class: 'tick', x: x(i), y: H - 12, 'text-anchor': 'middle' }, [mdy(r.date)])); });
+    svg.append(el('text', { class: 'tick', x: x(i), y: H - 12, 'text-anchor': 'middle' }, [binLabel(r.date)])); });
 
   const cross = el('line', { class: 'axis-line', y1: m.t, y2: m.t + ph, opacity: 0 });
   svg.append(cross);
@@ -423,24 +432,51 @@ function hbarPath(x, y, w, h, r = 4) {
   return `M${x} ${y} L${x + w - rr} ${y} Q${x + w} ${y} ${x + w} ${y + rr} L${x + w} ${y + h - rr} Q${x + w} ${y + h} ${x + w - rr} ${y + h} L${x} ${y + h} Z`;
 }
 
-/* ---------- weekly binning for long ranges ---------- */
-/** `keys` covers the comparison columns too, and the weeks line up because both
- *  years were merged onto one row per calendar day before binning. */
-function binWeekly(rows, keys) {
-  const out = [];
-  for (let i = 0; i < rows.length; i += 7) {
-    const chunk = rows.slice(i, i + 7);
-    // First day of the week that found a counterpart, not the first day of the
-    // week: early in a range the other year may not have started collecting yet,
+/* ---------- binning for long ranges ---------- */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * How coarse the bars have to be to stay drawable, from the span actually
+ * returned rather than the span asked for — "All history" is a request for
+ * whatever exists, and only the answer knows how much that is.
+ */
+function binFor(span) {
+  return span > 5475 ? 'year' : span > 730 ? 'month' : span > 120 ? 'week' : 'day';
+}
+const binLabeller = mode =>
+  mode === 'year' ? (d => d.slice(0, 4))
+  : mode === 'month' ? (d => `${MONTHS[+d.slice(5, 7) - 1]} '${d.slice(2, 4)}`)
+  : mdy;
+
+/**
+ * `keys` covers the comparison columns too, and the bins line up because both
+ * years were merged onto one row per calendar day before binning.
+ *
+ * Weeks are chunks of seven from the start of the range; months and years group
+ * by the calendar instead. A "month" of 30.4 days drifts, and lining August up
+ * with August is the entire point of looking at forty years at once.
+ */
+function binRows(rows, keys, mode) {
+  if (mode === 'day') return rows;
+  const groups = [], byKey = new Map();
+  rows.forEach((r, i) => {
+    const k = mode === 'week' ? Math.floor(i / 7)
+      : mode === 'month' ? r.date.slice(0, 7) : r.date.slice(0, 4);
+    let g = byKey.get(k);
+    if (!g) { g = []; byKey.set(k, g); groups.push(g); }
+    g.push(r);
+  });
+  return groups.map(chunk => {
+    // First day of the bin that found a counterpart, not the first day of the
+    // bin: early in a range the other year may not have started collecting yet,
     // and a blank there would read as a broken tooltip rather than a gap.
     const o = { date: chunk[0].date, end: chunk.at(-1).date, cdate: chunk.find(r => r.cdate)?.cdate };
     for (const k of keys) {
       const vals = chunk.map(r => r[k]).filter(has);
       o[k] = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) * 100) / 100 : null;
     }
-    out.push(o);
-  }
-  return out;
+    return o;
+  });
 }
 
 /* ---------- year-over-year comparison ---------- */
@@ -612,20 +648,24 @@ function wireCoordPaste(form) {
 function rangeWindow() {
   const v = $('rangeSel').value;
   const to = todayIso();
-  return v === 'ytd'
-    ? { from: `${to.slice(0, 4)}-01-01`, to }
-    : { from: addDaysIso(to, -Number(v)), to };
+  if (v === 'ytd') return { from: `${to.slice(0, 4)}-01-01`, to };
+  // "All history" is a question, not a number of days: PRISM reaches back to
+  // 1981 and IEMRE further, so how much there is depends on how deep a backfill
+  // has been run. A floor no record predates asks for whatever exists.
+  if (v === 'all') return { from: '1900-01-01', to };
+  return { from: addDaysIso(to, -Number(v)), to };
 }
 
 /** Keep the comparison picker's options in step with what the field has, without
  *  dropping a selection the reader made. */
-function refreshCompareSelect(years, cur) {
+function refreshCompareSelect(years, cur, locked) {
   const sel = $('cmpSel');
   const want = sel.value;
-  const opts = (years ?? []).filter(y => y !== cur);
-  sel.innerHTML = '<option value="">No comparison</option>'
+  const opts = locked ? [] : (years ?? []).filter(y => y !== cur);
+  sel.innerHTML = `<option value="">${locked ? 'Range over a year' : 'No comparison'}</option>`
     + opts.map(y => `<option value="${y}">${y}</option>`).join('');
   sel.value = opts.includes(want) ? want : '';
+  sel.disabled = !!locked;
   return sel.value;
 }
 
@@ -633,9 +673,14 @@ async function load() {
   const fieldId = $('fieldSel').value;
   const { from, to } = rangeWindow();
   const days = daysBetweenIso(from, to);
+  // A window longer than a year has no year-over-year overlay, and that is a
+  // correctness limit rather than a missing feature: the two years are folded
+  // together on month-day, which stops being a unique key the moment a range
+  // can contain the same calendar square twice.
+  const overAYear = days > 366;
   // Read before the fetch so both years go out together; the option list is
   // reconciled against the answer afterwards.
-  const cmpYear = $('cmpSel').value;
+  const cmpYear = overAYear ? '' : $('cmpSel').value;
   const shift = cmpYear ? Number(cmpYear) - Number(to.slice(0, 4)) : 0;
   const [{ rows, gauges, uncharted, years }, cmpRes, { summaries }, cal] = await Promise.all([
     fetch(`/api/series?field=${fieldId}&from=${from}&to=${to}`).then(r => r.json()),
@@ -647,7 +692,7 @@ async function load() {
     fetch('/api/calibration').then(r => r.json()),
   ]);
   const curYear = to.slice(0, 4);
-  const picked = refreshCompareSelect(years, curYear);
+  const picked = refreshCompareSelect(years, curYear, overAYear);
   // The picker can lose the selection when the field changes — a field added
   // last spring has no 2024. Nothing is drawn for a year that is not offered.
   const cmp = picked && picked === cmpYear && cmpRes?.rows?.length
@@ -700,13 +745,24 @@ async function load() {
        <div class="value">${dry === null || dry === undefined ? '—' : dry}</div>
        <div class="meta">last measurable ≥ 0.01"</div></div>`;
 
-  const weekly = days > 120;
+  // From the span actually returned, not the one requested: "All history" only
+  // knows how far back it goes once the answer is in, and a field added last
+  // spring has less of it than the home place does.
+  const span = rows.length ? daysBetweenIso(rows[0].date, rows.at(-1).date) : days;
+  const bin = binFor(span);
   const keys = SERIES.flatMap(s => (cmp ? [s.key, `c:${s.key}`] : [s.key]));
-  const chartRows = weekly ? binWeekly(rows, keys) : rows;
+  const chartRows = binRows(rows, keys, bin);
   const rfcFrom = rows.find(r => has(r.rfcqpe))?.date;
-  $('dailyNote').textContent = (weekly
-    ? 'Weekly totals. A blank slot means nothing reported for that week. '
-    : 'One bar per series per day. A missing bar means that one reported nothing — not that it stayed dry. ')
+  const BIN_NOTE = {
+    day: 'One bar per series per day. A missing bar means that one reported nothing — not that it stayed dry. ',
+    week: 'Weekly totals. A blank slot means nothing reported for that week. ',
+    month: 'Monthly totals, grouped by the calendar so August lines up with August. A blank slot means nothing reported that month. ',
+    year: 'Annual totals, one bar per series per calendar year. The first and last years are partial unless the range covers them whole. ',
+  };
+  $('dailyNote').textContent = BIN_NOTE[bin]
+    + (span > 366 && rows.length
+        ? `${rows[0].date.slice(0, 4)} to ${rows.at(-1).date.slice(0, 4)}. Before 2014 the only gridded source is PRISM — and IEMRE behind it — so radar QPE is absent rather than zero for those years. `
+        : '')
     + (cmp
         ? `${cmp.cur} is drawn above the line and ${cmp.prev} below it, same colour per source and the same scale on both halves, so the longer side is the wetter year. Matched by month and day. `
         : '')
@@ -729,18 +785,44 @@ async function load() {
   const starts = {};
   for (const s of SERIES) {
     const i = rows.findIndex(r => has(r[s.key]));
-    if (i > 0) starts[s.key] = `from ${mdy(rows[i].date)}`;
+    // The full date once the range spans years — "from 3/1" is no answer at all
+    // when the chart covers four decades of March firsts.
+    if (i > 0) starts[s.key] = `from ${span > 366 ? rows[i].date : mdy(rows[i].date)}`;
     else if (i < 0) starts[s.key] = 'no data yet';
   }
   legendInto($('legendDaily'), SERIES, starts, cmp ? yearKeyHtml('bars', cmp.cur, cmp.prev) : '');
   legendInto($('legendCum'), SERIES, starts, cmp ? yearKeyHtml('lines', cmp.cur, cmp.prev) : '');
-  drawDaily($('chartDaily'), chartRows, weekly ? (d => mdy(d)) : mdy, cmp);
-  drawCumulative($('chartCum'), rows, cmp);
-  $('cumNote').textContent = cmp
+  drawDaily($('chartDaily'), chartRows, binLabeller(bin), cmp);
+  // The cumulative line runs off the binned rows once the range is measured in
+  // years: the curve is identical at every bin boundary, and a single path of
+  // sixteen thousand points is a quarter-megabyte of `d` attribute for detail
+  // no one can see at this width.
+  drawCumulative($('chartCum'), bin === 'month' || bin === 'year' ? chartRows : rows, cmp, binLabeller(bin));
+  // Years inside the range that returned nothing at all.
+  //
+  // The cumulative chart spaces its points by position, not by date, so a year
+  // with no rows closes up instead of leaving a hole: three missing years draw
+  // as one continuous climb, and the total at the end is the sum of what is
+  // there presented as if it were an unbroken record. Naming the gap is far
+  // cheaper than re-scaling the axis, and it is more useful too — it says
+  // exactly which years to re-pull.
+  const gapYears = [];
+  if (rows.length) {
+    const seen = new Set(rows.map(r => r.date.slice(0, 4)));
+    for (let y = +rows[0].date.slice(0, 4); y <= +rows.at(-1).date.slice(0, 4); y++)
+      if (!seen.has(String(y))) gapYears.push(y);
+  }
+  const gapNote = gapYears.length
+    ? ` ${gapYears.length === 1 ? `${gapYears[0]} has` : `${gapYears.join(', ')} have`} no records at all, and this chart `
+      + 'closes that gap up rather than leaving a hole — the totals are of what is stored, not of an unbroken run. '
+      + '"Pull all history" under Data collection fills them in.'
+    : '';
+  $('cumNote').textContent = (cmp
     ? `Both years accumulate from the same day of the calendar, so the vertical gap between a solid line and its dashed twin is how far ahead or behind ${cmp.cur} is running. `
       + 'Day-level binning differences wash out over a range like this, so a gap that keeps widening is a real disagreement about this field.'
     : 'Accumulates across the range chosen above, not the whole season. This is the honest way to compare sources — day-level binning differences wash out, '
-      + 'so a gap that keeps widening is a real disagreement about this field. Two gauges drifting apart over a month is the clearest reading you get of how much a few miles matters here.';
+      + 'so a gap that keeps widening is a real disagreement about this field. Two gauges drifting apart over a month is the clearest reading you get of how much a few miles matters here.')
+    + gapNote;
   const shown = visibleFields();
   const scope = farmSel.size ? ` ${shown.length} of ${META.fields.length} fields shown for the selected farm${farmSel.size > 1 ? 's' : ''}.` : '';
   $('fieldsNote').textContent = `Radar QPE totals since ${META.seasonStart}. Selected field highlighted.${scope}`;
@@ -977,6 +1059,19 @@ function wireJobs() {
   $('jobBackfill').addEventListener('click', () => {
     if (!confirm('Pull the past year for every field? This can take several minutes.')) return;
     startJob('backfill', { note: 'requested from the dashboard' });
+  });
+  // The deep pull. PRISM is published from 1981, so this is where a field stops
+  // having one season of history and starts having four decades of it. It is
+  // slow enough to be worth saying so up front — roughly three seconds per year
+  // per field — and it stores each year as it finishes, so stopping partway
+  // keeps what it already has and running it again resumes.
+  $('jobHistory').addEventListener('click', () => {
+    const n = (META.fields ?? []).length;
+    const years = new Date().getFullYear() - PRISM_FROM + 1;
+    if (!confirm(`Pull every year back to ${PRISM_FROM} for all ${n} field${n === 1 ? '' : 's'}?\n\n`
+      + `That is ${years} years each, about ${Math.ceil(years * n * 3 / 60)} minutes, and it can run in the background `
+      + 'while you use the dashboard. Each year is saved as it arrives, so stopping partway keeps what it got.')) return;
+    startJob('backfill', { days: daysBetweenIso(`${PRISM_FROM}-01-01`, todayIso()), note: `history back to ${PRISM_FROM}` });
   });
   pollJobs();
 }

@@ -34,6 +34,9 @@
         <option value="90">Last 90 days</option>
         <option value="365">Last 12 months</option>
         <option value="ytd">Year to date</option>
+        <option value="1826">Last 5 years</option>
+        <option value="3653">Last 10 years</option>
+        <option value="all">All history</option>
       </select>
     </label>
     <label class="ctl">
@@ -131,6 +134,7 @@
         <button class="btn" type="button" id="jobIngest">Check for new rainfall</button>
         <button class="btn" type="button" id="jobDiscover">Re-map gauges</button>
         <button class="btn" type="button" id="jobBackfill">Pull past year</button>
+        <button class="btn" type="button" id="jobHistory">Pull all history</button>
       </div>
     </div>
     <p class="jobstatus" id="jobStatus"></p>
