@@ -1,5 +1,6 @@
 import { discoverStations } from './stations.js';
 import { ingest } from './ingest.js';
+import { buildArtifacts, uploadArtifacts } from './publish.js';
 import { today, addDays, isIsoDate, historyStart } from './util.js';
 
 /**
@@ -16,6 +17,11 @@ import { today, addDays, isIsoDate, historyStart } from './util.js';
  * second writer to fight over the SQLite lock.
  */
 const MAX_LINES = 200;
+
+/** Jobs after which the published copy is out of date. Not `publish` itself,
+ *  which would queue itself forever, and not `discover`, which only changes
+ *  which gauges are linked — the next ingest carries that through. */
+const CHANGES_DATA = new Set(['ingest', 'backfill', 'station', 'newfield']);
 
 /**
  * Where a backfill starts: an explicit date if it is one, then an explicit
@@ -68,6 +74,22 @@ export function createJobs(db, getCfg) {
       label: 'Reading the weather station',
       run: async (log) => ingest(db, getCfg(), { sdate: `${today().slice(0, 7)}-01`, log }),
     },
+    // The read-only copy on the web host. Fails soft on purpose: a web host
+    // that is down, a password that has been changed, or a farm connection that
+    // drops must not turn a successful rainfall collection into a failed run.
+    // The rain is already recorded here; the mirror catches up next time.
+    publish: {
+      label: 'Publishing the read-only charts',
+      run: async (log) => {
+        const cfg = getCfg();
+        if (cfg.publish?.enabled !== true) return log('Publishing is off in config.json.');
+        const files = buildArtifacts(db, cfg);
+        if (!cfg.publish?.ftp?.host) {
+          return log(`Built ${files.size} files, but publish.ftp.host is not set, so nothing was sent.`);
+        }
+        await uploadArtifacts(db, cfg, files, { log });
+      },
+    },
     // What adding or moving a field used to require two npm commands for.
     newfield: {
       label: 'Setting up the new field',
@@ -94,6 +116,13 @@ export function createJobs(db, getCfg) {
     try {
       await KINDS[job.name].run(push, job.opts ?? {});
       state.last[job.name] = { at: new Date().toISOString(), ok: true, note: job.note, lines: state.running.lines };
+      // The published copy is only ever out of date because the data was, so it
+      // follows whatever changed the data rather than keeping a clock of its
+      // own. A second timer would be a second thing to explain, and it would
+      // spend most of its life re-uploading files that had not changed.
+      if (getCfg().publish?.enabled === true && CHANGES_DATA.has(job.name)) {
+        state.queue.push({ name: 'publish', label: KINDS.publish.label, opts: {}, note: `after ${job.name}` });
+      }
     } catch (e) {
       push(`FAILED: ${e.message}`);
       state.last[job.name] = { at: new Date().toISOString(), ok: false, note: job.note, error: e.message, lines: state.running.lines };

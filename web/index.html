@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rain Monitor</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1.5 3.8 8a4.7 4.7 0 1 0 8.4 0z' fill='%232a78d6'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/style.css">
+<!-- Relative, not root-relative: the same markup is published as a static copy
+     that may be served from a subdirectory of somebody else's web host. -->
+<link rel="stylesheet" href="style.css">
 </head>
 <body class="viz-root">
 
@@ -26,6 +28,14 @@
       <span>Field</span>
       <select id="fieldSel"></select>
     </label>
+    <!-- Which year the range is measured back from. "This year" is the ordinary
+         case; pick another and the same window slides onto the same squares of
+         that year's calendar, so a comparison can be 1996 against 1988 without
+         either of them being now. -->
+    <label class="ctl">
+      <span>Year</span>
+      <select id="yearSel"><option value="">This year</option></select>
+    </label>
     <label class="ctl">
       <span>Range</span>
       <select id="rangeSel">
@@ -34,11 +44,16 @@
         <option value="90">Last 90 days</option>
         <option value="365">Last 12 months</option>
         <option value="ytd">Year to date</option>
+        <option value="year">Whole calendar year</option>
         <option value="1826">Last 5 years</option>
         <option value="3653">Last 10 years</option>
         <option value="all">All history</option>
       </select>
     </label>
+    <!-- One picker for both comparisons, because they are alternatives rather
+         than options: a second year and a second field at once is four series
+         per source, which is a thicket, not a comparison. Choosing from one list
+         is what makes that exclusive without a rule to explain. -->
     <label class="ctl">
       <span>Compare with</span>
       <select id="cmpSel"><option value="">No comparison</option></select>
@@ -49,6 +64,13 @@
 </header>
 
 <main>
+  <!-- publish:admin start
+       Everything between these markers is cut out of the published static copy
+       by src/publish.js. The remote is a plain file host: there is no API there
+       to answer a POST, so a form that appears to work and silently does not is
+       worse than one that is not on the page at all. Split on markers rather
+       than matched by a regex over the markup, so moving a card between the two
+       halves is an edit to this file and nothing else. -->
   <div class="banner" id="updateBanner" role="status" hidden>
     <div>
       <strong id="updateBannerTitle"></strong>
@@ -59,6 +81,7 @@
       <button class="linkbtn" type="button" id="updateDetails">What's new</button>
     </div>
   </div>
+  <!-- publish:admin end -->
 
   <section class="kpis" id="kpis" aria-label="Rainfall summary"></section>
 
@@ -87,7 +110,10 @@
   <section class="card">
     <div class="card-head">
       <div>
-        <h2>All fields, season to date</h2>
+        <!-- The heading is rewritten when two years are being compared: these
+             bars stop being "season to date" and become one year against
+             another, and a heading that still said otherwise would be wrong. -->
+        <h2 id="fieldsTitle">All fields, season to date</h2>
         <p class="note" id="fieldsNote"></p>
       </div>
     </div>
@@ -115,6 +141,7 @@
     <div class="table-wrap"><table id="dataTable"><thead></thead><tbody></tbody></table></div>
   </section>
 
+  <!-- publish:admin start -->
   <section class="card">
     <div class="card-head"><div><h2>What counts for <span id="exField">this field</span></h2>
       <p class="note">Untick a source or a gauge and it stops counting for this field, in the past as well as going forward. Nothing is deleted — tick it back on and the history returns.</p>
@@ -133,6 +160,7 @@
       <div class="jobactions">
         <button class="btn" type="button" id="jobIngest">Check for new rainfall</button>
         <button class="btn" type="button" id="jobDiscover">Re-map gauges</button>
+        <button class="btn" type="button" id="jobPublish" hidden>Publish now</button>
       </div>
     </div>
     <p class="jobstatus" id="jobStatus"></p>
@@ -299,11 +327,12 @@
     <p class="jobstatus" id="updateStatus"></p>
     <div class="table-wrap" id="updateListWrap" hidden><table id="updateTable"><thead></thead><tbody></tbody></table></div>
   </section>
+  <!-- publish:admin end -->
 
   <p class="footer" id="footer"></p>
 </main>
 
 <div id="tooltip" class="tooltip" role="status" aria-live="polite" hidden></div>
-<script type="module" src="/app.js"></script>
+<!-- publish:static --><script type="module" src="app.js"></script>
 </body>
 </html>

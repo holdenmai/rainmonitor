@@ -1,6 +1,8 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { openDb, syncFields } from './db.js';
-import { today, addDays } from './util.js';
+import { today, addDays, ROOT } from './util.js';
+import { buildArtifacts, uploadArtifacts } from './publish.js';
 import { discoverStations, linkManualGauges } from './stations.js';
 import { ingest } from './ingest.js';
 import { buildExport, applyImport, rederiveAfterImport } from './sync.js';
@@ -43,6 +45,11 @@ const usage = () => console.log(`rainmonitor
 
   npm run backup -- [--out file.json]        everything: config + the whole database
   npm run restore -- --file file.json        REPLACES everything on this machine
+
+  npm run publish -- [--out dir] [--no-upload] [--full]
+                                             build the read-only static copy, and send it
+                                             (--full re-sends everything, ignoring what
+                                             was sent last time)
 
 Export/import merges a date range between machines that are both collecting.
 Backup/restore copies one machine onto another, and needs both on the same version.
@@ -188,6 +195,47 @@ async function main() {
         console.log(`Restored ${a.file}: ${counts.field} fields, ${counts.obs} observations, `
           + `${counts.station_obs} station readings, and config.json.`);
         console.log('  Restart the dashboard to pick it up.');
+      }
+    } catch (e) {
+      console.error(`Error: ${e.message}`);
+      process.exitCode = 1;
+    } finally {
+      db.close();
+    }
+    return;
+  }
+
+  // Build the static copy of the dashboard, and — once there is somewhere to
+  // put it — send it. --out on its own writes the tree and stops, which is how
+  // it is checked before anyone's web host is involved.
+  if (cmd === 'publish') {
+    const a = flags(rest);
+    const db = openDb();
+    try {
+      const files = buildArtifacts(db, cfg);
+      const total = [...files.values()].reduce((n, s) => n + Buffer.byteLength(s), 0);
+      const out = a.out ?? join(ROOT, 'data', 'published');
+      mkdirSync(out, { recursive: true });
+      for (const [rel, body] of files) {
+        const dest = join(out, rel);
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(dest, body);
+      }
+      console.log(`Wrote ${files.size} files to ${out} (${Math.round(total / 1024)} KB).`);
+
+      // The upload is opt-in twice over: the host has to be configured, and
+      // --no-upload has to not be passed. Building is safe and repeatable;
+      // sending touches somebody else's web server.
+      if (a['no-upload'] === 'true') {
+        console.log('  --no-upload: built only. Open it with any static file server to check it.');
+      } else if (!cfg.publish?.ftp?.host) {
+        console.log('  publish.ftp.host is not set, so nothing was sent — upload the folder yourself,');
+        console.log('  or fill in the publish.ftp section of config.json.');
+      } else {
+        const r = await uploadArtifacts(db, cfg, files, { log: s => console.log(s), full: a.full === 'true' });
+        console.log(r.sent
+          ? `Sent ${r.sent} file(s), ${Math.round(r.bytes / 1024)} KB. ${r.skipped} already current.`
+          : 'Nothing needed sending.');
       }
     } catch (e) {
       console.error(`Error: ${e.message}`);

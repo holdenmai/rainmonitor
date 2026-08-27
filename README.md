@@ -175,6 +175,48 @@ Leaving the amount blank deletes a reading rather than storing `0.00` — "I
 haven't read it" and "it stayed dry" have to stay different answers. Removing a
 gauge keeps its readings, so adding it back restores them.
 
+## Comparing years, and comparing fields
+
+Four pickers across the top: **Farm**, **Field**, **Year**, **Range**, and
+**Compare with**.
+
+**Year** is which year the range is measured back from. Leave it on "This year"
+and everything behaves as it always has; set it to 1996 and the whole window
+slides onto the same squares of that year's calendar — "Last 30 days" becomes the
+same thirty days of 1996. That is what lets a comparison be 1996 against 1988
+with neither side being now. While a past year is on screen the tiles get one
+extra tile for that year's total, because every other tile is a window ending
+*today* and always will be.
+
+**Compare with** offers two things in one list, and they are alternatives rather
+than options:
+
+- **Another year** — the same field, the same window, N years back. Matched by
+  month and day, so February 29th drops out instead of shunting every later date
+  one place. Only offered for a range under a year: a longer window can hold the
+  same calendar square twice, and then there is nothing to match on.
+- **Another field** — the same days, different ground. Two fields cannot be drawn
+  gauge by gauge, because this field's nearest station and that one's are
+  measurements of different places; the gauges collapse to one figure per field
+  (nearest that reported), and the gridded sources are drawn for both.
+
+Two fields *and* two years at once would be four lines per source, which is a
+thicket rather than a comparison, so the one picker holds both.
+
+Either way the second half is drawn **below the baseline** on the daily chart and
+**dashed** on the cumulative one, in the same colour per source. The year or the
+field is never carried by a second set of hues: one of the people this was built
+for is colourblind, and a shifted hue either disappears or stops reading as the
+same series. When two years are compared, the **All fields** bars answer for both
+years too — those are whole calendar years, cut off at today's date if one of
+them is this year, and the card says so, because it is a different window from
+the charts above.
+
+Clicking a name in a **legend** takes that series off both upper charts until you
+click it back on — useful when seven lines are in the way of the two you are
+comparing. It is temporary and lives nowhere: a reload brings everything back.
+The permanent version of the same idea is the panel below.
+
 ## Choosing what counts for a field
 
 Not every source describes every field. An on-farm gauge is ground truth on the
@@ -283,6 +325,74 @@ settings by itself.
 
 The backup contains your station's address and all your field coordinates. It is
 a local file; treat it the way you treat `config.json`.
+
+### A read-only copy on the web
+
+The dashboard binds to loopback, which is the right default and also means the
+rain can only be read from the one computer it runs on. `npm run publish` builds
+a **read-only copy of the charts** — a folder of plain `.html`, `.js` and
+`.json` files that any web host can serve, with no Node, no database and nothing
+to configure at the other end.
+
+```bash
+npm run publish                             # build it and send it
+npm run publish -- --no-upload              # build only, into data/published
+npm run publish -- --full                   # re-send everything, not just what changed
+npm run check-publish                       # does the copy still say what this machine says?
+```
+
+Once `publish.enabled` is on it goes out **by itself, after every collection
+run** — the copy is only ever out of date because the data was, so it follows
+the data rather than keeping a clock of its own. There is a **Publish now**
+button on the dashboard for when you have changed something and want it up
+straight away. A web host that is down, a password that has been changed or a
+connection that drops is recorded in the job log and nothing more: the rain is
+already saved here, and the mirror catches up on the next run.
+
+It is the same page: the same charts, the same field, year and range pickers, the
+same comparisons — another year or another field — and the same clickable
+legends, drawn by the same `web/app.js`. What is missing is
+every control that would change something. Those cards are **cut out of the
+published HTML**, not hidden in it — there is no dashboard at the far end for a
+form to post to, and a button that appears to work and silently does not is
+worse than one that was never on the page.
+
+Configure it under `publish` in `config.json`:
+
+- **`fields`** — which fields appear, by id. Empty means all of them. A field
+  that is not listed is absent from the published copy, not hidden in it.
+- **`coordinates`** — off by default. Leaves out field latitude and longitude
+  *and* the distance to every gauge, because a named field plus a named gauge
+  plus "4.2 mi" is a location whether or not a latitude was published.
+- **`calibration`** — off by default. The calibration card names your own
+  weather station and says where it stands.
+
+Field names, farm names and acreage are always published; the page cannot tell
+one field from another without them. **Assume anyone can read these files** —
+that is what a static host is for — and use `--out` to look through the folder
+before deciding what goes on it.
+
+Forty-five years of eight fields is about 4.7 MB, and all but 72 KB of that is
+history that only changes when a backfill or an exclusion rewrites the past. The
+series is split at January 1st for exactly that reason: the frozen half is
+uploaded once, and only this year's numbers travel each day. What is already on
+the host is remembered here and skipped, so a second run sends nothing at all.
+
+**Getting to the host.** `publish.ftp` takes plain FTP or **explicit FTPS** —
+the ordinary port 21, upgraded to TLS with `AUTH TLS` before the password is
+sent. Leave `secure` on: with it off the password crosses the internet as
+readable text. Use an account that can write that one directory and nothing
+else, not the one you sign in to the web host with; the password sits in
+`config.json` in the clear, because FTP gives it nowhere else to live.
+
+**SFTP is not supported.** SFTP is a subsystem of SSH, and implementing SSH
+would mean taking a dependency, which this project does not do. If the host only
+offers SFTP, build with `--no-upload` and send the folder with whatever client
+you already use.
+
+Every file lands under a temporary name and is renamed into place, so nobody
+can fetch a half-written file — there is no server at the other end to retry
+against, and a truncated JSON is a blank page on somebody's phone.
 
 ## Where the numbers come from
 
@@ -483,7 +593,7 @@ Setup.cmd                     double-click installer (Windows)
 scripts/setup.ps1             what it runs: autostart, shortcut, config
 config.example.json           template; npm run init copies it to config.json
 config.json                   YOUR setup — gitignored, never committed
-src/cli.js                    init | discover | ingest | backfill | export | import | backup | restore
+src/cli.js                    init | discover | ingest | backfill | export | import | backup | restore | publish
 src/setup.js                  config read/write, field + gauge + station validation
 src/region.js                 lat/lon -> state -> gauge networks
 src/ingest.js                 pull the sources
@@ -495,10 +605,16 @@ src/backup.js                 whole-machine backup/restore (config + every table
 src/sources/                  iemre, rfcqpe, iemgauge, ksmesonet, weatherlink
 src/calibration.js            gauge-vs-grid bias (shared by CLI and dashboard)
 src/db.js                     SQLite schema
+src/views.js                  the read side: series, summary, CSV, field list
+src/publish.js                build the read-only static copy, and send what changed
+src/ftp.js                    minimal FTP / explicit-FTPS client (no dependencies)
 src/server.js                 local HTTP API + static host
 web/                          dashboard (vanilla JS, inline SVG charts)
+web/static.js                 published copy only: serves the API out of files
 scripts/calibrate.mjs         npm run calibrate
 scripts/check-alignment.mjs   npm run check
+scripts/check-publish.mjs     npm run check-publish
+scripts/check-ftp.mjs         npm run check-ftp (loopback FTP server, no network)
 scripts/register-task.ps1     Windows scheduled task
 data/rain.db                  your history — this is the thing worth backing up
 ```

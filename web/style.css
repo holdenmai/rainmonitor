@@ -129,9 +129,26 @@ main { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 16px
 .card-head { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
 
 /* Legend is always present for >= 2 series; identity is never color-alone. */
-.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--text-secondary); }
+.legend { display: flex; flex-wrap: wrap; gap: 12px 8px; font-size: 12px; color: var(--text-secondary); }
 .legend .item { display: inline-flex; align-items: center; gap: 6px; }
 .legend .swatch { width: 10px; height: 10px; border-radius: 3px; }
+
+/* The legend is also the chart's controls: a series is clicked off the two
+   charts and clicked back on. Only the buttons take these — the year key beside
+   them is a `.item` too and describes form, not something you can switch. */
+.legend button.item {
+  font: inherit; font-size: 12px; color: inherit; background: none;
+  border: none; padding: 3px 5px; margin: -3px 0; border-radius: 6px; cursor: pointer;
+}
+.legend button.item:hover { background: var(--plane); }
+.legend button.item:focus-visible { outline: 2px solid var(--series-gauge); outline-offset: 0; }
+/* Struck through rather than removed: a series put away for a minute must stay
+   distinguishable from one that has nothing to draw, and it has to stay
+   clickable to come back. Line-through survives forced-colors, where opacity
+   alone would not. */
+.legend button.item.off { color: var(--text-muted); text-decoration: line-through; }
+.legend button.item.off .swatch { opacity: 0.3; }
+.legend button.item.back { text-decoration: underline; color: var(--series-gauge); }
 /* The year key: which half / which stroke is which year. It describes form, not
    identity, so its glyphs inherit the legend's ink rather than a series colour. */
 .legend .ykey { width: 24px; height: 14px; flex: none; }
