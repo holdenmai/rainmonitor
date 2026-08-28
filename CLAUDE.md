@@ -24,6 +24,9 @@ npm run discover        # map each field to nearby gauges (network round trips)
 npm run ingest          # pull the last `ingest.revisitDays` (default 10)
 npm run backfill 400    # pull N days of history
 npm run check [field]   # date-alignment diagnostic: cross-correlate vs MRMS at lags -2..+2
+npm run publish [-- --no-upload|--full]   # build the static copy and FTP what changed
+npm run check-publish   # does that copy still say what this machine says?
+npm run check-ftp       # round-trip src/ftp.js against a loopback FTP server
 npm run calibrate       # on-farm gauge vs MRMS/PRISM, split warm/cold season
 npm run fields | add-field | update-field | remove-field | export | import
 npm run backup          # config.json + every table, one file
@@ -149,6 +152,69 @@ then `server.js:restart()` spawns a detached fresh process and the old one exits
 Everything about it fails soft — no git, no upstream, or offline means "updates
 unavailable" plus one sentence, not an error.
 
+### The published copy is the same page, not a second one
+
+`npm run publish` writes a static mirror for a host that can only serve files.
+It works because `web/app.js` already draws every chart in the browser from four
+GET payloads, so there is no renderer in `src/publish.js` — it writes those
+payloads to disk and lets the *same* `app.js` draw the *same* charts.
+
+- `src/views.js` holds `series`/`summary`/`csv`/`meta`/`yearsWithData` as a
+  `createViews(db, getCfg)` factory (the `createJobs`/`createUpdates` idiom).
+  Both `server.js` and `publish.js` answer from it, so the published page and
+  the machine it came from cannot disagree about a number.
+- `web/app.js` runs in both homes: `STATIC = !!window.RM_STATIC` and every
+  read goes through `apiGet`. All the mutating wiring is grouped in
+  `wireAdmin()` and skipped — not guarded — because the markup it reaches for is
+  **cut out** of the published HTML at the `<!-- publish:admin start/end -->`
+  markers in `web/index.html`. Move a card between the halves by moving a marker.
+- **Values are published at stored precision, never at display precision.**
+  Rounding to the two decimals the page prints looks free and is not: MRMS
+  reported 0.185 in on 2026-08-11, which `Math.round(v*100)/100` makes 0.19 and
+  the page's own `toFixed(2)` makes 0.18 — and every cumulative total shifts,
+  because those sum raw values and round once at the end. It saved 3%.
+- The series splits at January 1st (`history.json` / `current.json`) so a daily
+  upload is 72 KB rather than 4.7 MB. Split by *era*, not by resolution: every
+  row stays daily, so the remote charts are the same charts.
+- Redaction is a setting, not a habit: `publish.coordinates` drops field lat/lon
+  **and** `dist_km`, because a named field plus a named gauge plus "4.2 mi" is a
+  location. Dropping `gauge_src`/`manual_src` is free — nothing in `web/app.js`
+  reads them — and removes the only free-text distance in the payload.
+- `npm run check-publish` is the regression test that matters here, the way
+  `npm run check` is for ingest. It decodes the build the way `web/static.js`
+  does — a deliberate second implementation, since re-using the encoder to check
+  the encoder would pass whatever either of them did.
+
+### `src/ftp.js`, and why the test is on the wire
+
+Zero dependencies means writing the FTP client. It handles four upstream traps,
+documented in the module: multiline replies, `EPSV` before `PASV` (and ignoring
+PASV's advertised address, which is wrong behind NAT), waiting for **both** the
+226 and the data socket's close, and resuming the control connection's TLS
+session on the data channel. **SFTP is out of reach** — it is SSH, which cannot
+be implemented here without a dependency.
+
+The TLS session is captured two ways on purpose: `getSession()` covers TLS 1.2,
+and the `'session'` event covers 1.3, where the ticket only arrives *after* the
+handshake and `getSession()` returns null. Read it one way and vsftpd's
+`require_ssl_reuse=YES` refuses every transfer with a bare `425`.
+
+`npm run check-ftp` stands a deliberately awkward FTP server up on loopback and
+round-trips real files through it. Two things about it are load-bearing:
+
+- **The reuse check reads the ClientHello bytes**, not Node's
+  `isSessionReused()`. Two in-process Node TLS servers sharing ticket keys would
+  not report a resumption even to themselves, so a test built on that API would
+  have passed or failed for reasons unrelated to this client.
+- **The legacy session id is not a resumption signal under TLS 1.3.** A 1.3
+  client fills it with 32 random bytes on every handshake for middlebox
+  compatibility. Treating it as one made the check pass against a client with
+  session-passing deliberately deleted — which is how the mistake was caught, and
+  why any change there should be re-verified by breaking the client on purpose.
+
+Publishing fails soft, like `src/update.js`: no host, wrong password or a dead
+connection is recorded in the job log and never fails the ingest that queued it.
+
 ### HTTP layer
 
 `src/server.js` is one `createServer` handler with a path `if`-chain, a static
@@ -177,19 +243,61 @@ framework and no bundler — it is served as-is.
   all-fields chart, the calibration and the CSV need. Charted gauges are capped
   at `GAUGE_SLOTS` (4) and the rest are named in the response's `uncharted`, so
   the cap is stated rather than silent.
-- **The year comparison is encoded by position and stroke, never by hue.**
-  Picking a year in the "Compare with" box fetches the same month-day window
-  shifted back N years (`/api/series` takes `from`/`to`) and folds it onto the
-  same rows as `c:<key>` columns, matched on month-day so a leap day drops out
-  instead of shunting every later date one place. The daily chart mirrors last
-  year *below* the baseline on the same scale; the cumulative chart overlays it
-  dashed, in the same colour per source. One of the readers is colourblind, so a
-  shifted or faded hue is not available: shift it far enough to see and the two
-  years stop reading as the same series. The fade (`CMP_FADE`) is a third signal
-  on top of position, never the only one. **The picker is disabled above a
-  366-day range** (`overAYear` in `load()`) — month-day stops being a unique key
-  the moment a window can hold the same calendar square twice, so this is a
-  correctness limit, not a missing feature.
+- **The comparison is encoded by position and stroke, never by hue.** Whichever
+  kind it is, the other side is folded onto the same rows as `c:<key>` columns
+  (`mergeCompare`), the daily chart mirrors it *below* the baseline on the same
+  scale, and the cumulative chart overlays it dashed in the same colour per
+  source. One of the readers is colourblind, so a shifted or faded hue is not
+  available: shift it far enough to see and the two stop reading as the same
+  series. The fade (`CMP_FADE`) is a third signal on top of position, never the
+  only one.
+- **Which year the window sits in is separate from what it is compared against.**
+  The "Year" picker slides the whole range bodily into another year keeping its
+  month-days (`rangeWindow(year)`), so a comparison can be 1996 against 1988 with
+  neither side being now. Doing the shift on the window rather than inside the
+  comparison is what makes both halves the same kind of thing. When a past year
+  is on screen the KPI tiles get one extra tile for that year, because every
+  other tile is a window ending *today* and always will be.
+- **"Compare with" is one picker holding both kinds, `y:1996` or `f:north80`.**
+  Two fields *and* two years at once is four lines per source, which is a
+  thicket rather than a comparison; a single select is the one control that
+  cannot be in both states at once, so the limit needs no rule to enforce it.
+  A year comparison matches on month-day and **is disabled above a 366-day
+  range** (`overAYear` in `load()`) — month-day stops being a unique key the
+  moment a window can hold the same calendar square twice, so that is a
+  correctness limit, not a missing feature. A field comparison matches on the
+  date itself and has no such limit.
+- **Two fields are compared on the derived `gauge` column, not gauge by gauge**
+  (`fieldSeries` in `web/app.js`) — the one place that column is charted, and the
+  right one: this field's nearest station and that one's are different ground, so
+  pairing them by slot would put two stations under one colour and call it the
+  same series. Its colours are the palette's validated two-gauge prefix
+  (`--series-gauge` *is* `--series-g1`, manual takes g2).
+- **The all-fields bars are whole calendar years when two years are compared**,
+  from `views.yearTotals()` — `total` and `ytd` per field per year, plus the
+  `src` that answered, since radar does not exist before ~2014. Deliberately not
+  the window the charts above use: this card is answered from one pre-built file
+  so the published copy can draw it too, and an arbitrary window for every field
+  would mean shipping every field's daily history to the browser to draw one bar
+  apiece. The heading and note say which window it is rather than pretending.
+- **`yearTotals()` is asked for by year, and that is a performance requirement,
+  not a nicety.** Its GROUP BY key is computed (`substr(date, 1, 4)`), so no
+  index can serve it and every year means a full scan of `obs` — 390k rows,
+  2.8s through the live connection here and over 50s as it landed in the
+  browser. Naming the years turns it into a `MULTI-INDEX OR` range scan on
+  `obs_date_idx`: 29ms.
+  `/api/summary` is fetched on **every** field, range and comparison change, so
+  it passes `?years=` and answers `{}` when nothing on the page needs a total.
+  Only `src/publish.js` asks for every year, once per build, where the cost sits
+  beside encoding 4.7 MB of history anyway. A covering index on
+  `(source, field_id, date, precip_in)` was measured and is *slower* (525ms vs
+  270ms) as well as 13 MB — don't add it.
+- **The legend is also the chart's controls.** Clicking a series takes it off
+  both upper charts (`hiddenSeries` + `renderCharts()`); it is held in memory
+  only, so a reload brings it back. That is deliberately *not*
+  `exclude.sources`, which is permanent and changes every number on the page and
+  in the CSV. A hidden series stays in the legend struck through — it must not
+  become indistinguishable from one that has no data to draw.
 - **History goes back to 1981, and the sources stop at different depths.**
   Verified 2026-08-15 against the farm's own coordinates: PRISM returns a value
   for every day from 1981; IEMRE reaches at least to 1950; MRMS is modern only

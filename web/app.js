@@ -1,4 +1,19 @@
 /**
+ * One file, two homes: this same script runs against the dashboard's API and
+ * against a published static copy on a web host that can serve nothing but
+ * files. `static.js` — loaded ahead of this module, and only in the published
+ * build — sets window.RM_STATIC and answers the read-only endpoints out of
+ * pre-generated JSON.
+ *
+ * Forking this file for the static build was the alternative, and it would have
+ * meant two copies of every chart drawer drifting apart. The charts are already
+ * pure functions of the rows, so the only thing that has to differ is where the
+ * rows come from — and which half of the page exists at all.
+ */
+const STATIC = !!window.RM_STATIC;
+const apiGet = path => (STATIC ? window.RM_STATIC.get(path) : fetch(path).then(r => r.json()));
+
+/**
  * The gridded series, in the order the palette was validated for — see the
  * note in style.css. rfcqpe / prism / mrms, not rfcqpe / mrms / prism, because
  * yellow beside orange is the one adjacent pair here that full-colour vision
@@ -38,13 +53,56 @@ const gaugeSeries = gauges => gauges.map((g, i) => ({
   key: g.key,
   label: g.name,
   color: `var(--series-g${i + 1})`,
-  note: `${g.manual ? 'read by hand' : g.network.replace(/_/g, ' ')}, ${mi(g.dist_km)}`,
+  // The distance is dropped from the published copy along with the field's
+  // coordinates — knowing a gauge is 4.2 miles from a field you can name is
+  // most of the way to knowing where the field is. Omitted rather than zeroed:
+  // Number(null) is 0, so an unguarded mi() would read "0.0 mi", which is not
+  // "withheld", it is a claim that the gauge is standing in the field.
+  note: [g.manual ? 'read by hand' : g.network.replace(/_/g, ' '),
+    g.dist_km === null || g.dist_km === undefined ? null : mi(g.dist_km)].filter(Boolean).join(', '),
   gauge: g,
 }));
+
+/**
+ * What two *fields* can be compared on.
+ *
+ * Not gauge by gauge. This field's nearest COOP station and that one's are
+ * different pieces of ground, and pairing them by slot would put two stations
+ * under one colour and call it the same series. So this is the one place the
+ * derived `gauge` column is charted, and it is the right place for it: that
+ * column is by definition the one-number-per-field answer, which is exactly the
+ * granularity a field-against-field question is asked at.
+ *
+ * The colours are the palette's validated two-gauge prefix — `--series-gauge`
+ * *is* `--series-g1`, manual takes g2 — so the run into the three gridded hues
+ * is one the CVD gates were already cleared for.
+ */
+const fieldSeries = (rows, other) => [
+  { key: 'gauge', label: 'Rain gauges', color: 'var(--series-gauge)' },
+  ...([...rows, ...other].some(r => has(r.manual))
+    ? [{ key: 'manual', label: 'Manual gauges', color: 'var(--series-g2)' }] : []),
+  ...GRID_SERIES,
+];
 
 // What is actually drawn, rebuilt per field: which gauges a field has, and how
 // many of them count, is a property of the field.
 let SERIES = GRID_SERIES;
+
+/**
+ * Series switched off on the charts for the moment.
+ *
+ * Deliberately not `exclude.sources`, which is the permanent answer to "what
+ * counts for this field" and changes every number on the page, the CSV and the
+ * derived rows behind them. This is the temporary one: seven series over ninety
+ * days is a thicket when the question is "did those two gauges agree", and the
+ * cure is putting five of them away for a minute, not editing the field.
+ *
+ * It lives in memory and nowhere else. A reload brings everything back, which is
+ * what keeps a glance from quietly becoming a setting — and what keeps a hidden
+ * series from ever being mistaken for one that reported nothing.
+ */
+const hiddenSeries = new Set();
+const shownSeries = () => SERIES.filter(s => !hiddenSeries.has(s.key));
 const SVG = 'http://www.w3.org/2000/svg';
 const el = (n, a = {}, kids = []) => {
   const e = document.createElementNS(SVG, n);
@@ -135,14 +193,43 @@ function showTip(evt, title, rows, note) {
 }
 const hideTip = () => { tip.hidden = true; };
 
+/**
+ * The legend is also the switch: clicking a series takes it off both charts
+ * until it is clicked back on.
+ *
+ * Put here rather than in a row of checkboxes above the chart because the
+ * legend is already the list of what is drawn, and it is already where the eye
+ * goes to ask "which one is that". A second list of the same names would be a
+ * second thing to keep in step.
+ *
+ * A hidden series keeps its place in the legend, struck through — it has to
+ * stay visible, or a source that was put away for a minute is indistinguishable
+ * from one that has no data, which is the one confusion this whole file is
+ * built to avoid.
+ */
 function legendInto(node, items, notes = {}, extra = '') {
-  node.innerHTML = items.map(s =>
-    `<span class="item"><span class="swatch" style="background:${s.color}"></span>${esc(s.label)}`
-    // Only the gauges carry their note into the legend — which network and how
-    // far out — because that is what tells two station names apart. The gridded
-    // sources are described in the card's own text.
-    + (s.gauge ? ` <span class="none">${esc(s.note)}</span>` : '')
-    + (notes[s.key] ? ` <span class="none">${esc(notes[s.key])}</span>` : '') + '</span>').join('') + extra;
+  const off = items.filter(s => hiddenSeries.has(s.key)).length;
+  node.innerHTML = items.map(s => {
+    const hid = hiddenSeries.has(s.key);
+    return `<button type="button" class="item${hid ? ' off' : ''}" data-series="${esc(s.key)}"`
+      + ` aria-pressed="${hid ? 'false' : 'true'}" title="${hid ? 'Show' : 'Hide'} ${esc(s.label)} on the charts">`
+      + `<span class="swatch" style="background:${s.color}"></span>${esc(s.label)}`
+      // Only the gauges carry their note into the legend — which network and how
+      // far out — because that is what tells two station names apart. The gridded
+      // sources are described in the card's own text.
+      + (s.gauge ? ` <span class="none">${esc(s.note)}</span>` : '')
+      + (notes[s.key] ? ` <span class="none">${esc(notes[s.key])}</span>` : '') + '</button>';
+  }).join('') + extra
+    + (off ? `<button type="button" class="item back" data-series="*">Show all (${off} hidden)</button>` : '');
+
+  node.querySelectorAll('[data-series]').forEach(b => b.addEventListener('click', () => {
+    const k = b.dataset.series;
+    if (k === '*') hiddenSeries.clear();
+    else if (!hiddenSeries.delete(k)) hiddenSeries.add(k);
+    // A redraw, not a reload: the rows on screen are the rows either way, and a
+    // round trip per click would make putting a series away feel like a query.
+    renderCharts();
+  }));
 }
 
 /** One place for the comparison year's two non-hue signals. */
@@ -150,14 +237,16 @@ const CMP_FADE = 0.55;
 const CMP_DASH = '7 4';
 
 /**
- * How the two years are told apart, spelled out beside the series.
+ * How the two sides of a comparison are told apart, spelled out beside the
+ * series. The same key serves both kinds: two years of one field, or two fields
+ * over one window — which is the point of encoding it this way at all.
  *
- * The year rides on position (above or below the baseline) and stroke form
- * (solid or dashed) — never on a second set of hues. One of the people reading
- * this is colourblind, and "the same source, the other year" is exactly the
- * pairing a shifted hue destroys: shift it far enough to be visible and the two
- * stop reading as the same series; keep it close and it is invisible. Position
- * and dash survive any vision, any print, and forced-colors mode.
+ * The other side rides on position (above or below the baseline) and stroke
+ * form (solid or dashed) — never on a second set of hues. One of the people
+ * reading this is colourblind, and "the same source, the other year" is exactly
+ * the pairing a shifted hue destroys: shift it far enough to be visible and the
+ * two stop reading as the same series; keep it close and it is invisible.
+ * Position and dash survive any vision, any print, and forced-colors mode.
  *
  * The glyphs wear the legend's own ink, not a series colour — identity is
  * already carried by the swatches above; this key is about form.
@@ -179,17 +268,21 @@ function yearKeyHtml(kind, curYear, cmpYear) {
 
 /* ---------- Chart 1: daily rainfall, grouped bars ---------- */
 /**
- * `cmp` — `{ cur, prev }`, the two years — mirrors the comparison year below
+ * `cmp` — `{ kind, cur, prev }`, the two sides — mirrors the comparison below
  * the baseline rather than squeezing a second bar into every day's slot.
  *
  * Pairing the bars sideways would halve a width that is already under two
  * pixels at 90 days with seven series, and the only channel left to mark the
- * year with would have been colour. Up versus down costs no width and is
+ * other side with would have been colour. Up versus down costs no width and is
  * readable by anyone. It also puts each pair back to back, which is the
- * comparison — "more or less than the same day last year" is one glance at
- * which side of the line is longer.
+ * comparison — "more or less than the same day last year", or "more or less
+ * than the north eighty" — is one glance at which side of the line is longer.
+ *
+ * `series` is passed in rather than read from the module binding because the
+ * legend can put some of them away; SERIES stays the full list so they can be
+ * fetched back out.
  */
-function drawDaily(svg, rows, binLabel, cmp) {
+function drawDaily(svg, rows, binLabel, cmp, series) {
   const W = 1100, H = cmp ? 430 : 300;
   const m = { t: 14, r: cmp ? 56 : 16, b: 34, l: 44 };
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
@@ -199,7 +292,7 @@ function drawDaily(svg, rows, binLabel, cmp) {
   // One scale for both halves: a bar above and a bar below are the same inches
   // per pixel, or the chart would be inventing the comparison it is drawing.
   const max = Math.max(0.1, ...rows.flatMap(r =>
-    SERIES.flatMap(s => [r[s.key] ?? 0, cmp ? (r[`c:${s.key}`] ?? 0) : 0])));
+    series.flatMap(s => [r[s.key] ?? 0, cmp ? (r[`c:${s.key}`] ?? 0) : 0])));
   const { top, ticks } = niceTicks(max);
   const half = cmp ? ph / 2 : ph;
   const base = m.t + half;                 // mid-plot when comparing, the floor otherwise
@@ -211,7 +304,7 @@ function drawDaily(svg, rows, binLabel, cmp) {
   // bars kept their stride and marched over the next day's slot — already true
   // at 90 days, and worse now a field can draw seven series. The gap shrinks
   // with the slot instead, which keeps the group inside its own day.
-  const slot = Math.max(0.8, (gw - 4) / SERIES.length);
+  const slot = Math.max(0.8, (gw - 4) / Math.max(1, series.length));
   const bw = Math.max(0.8, slot - Math.min(2, slot * 0.3));  // surface gap between adjacent bars
 
   for (const t of ticks) {
@@ -224,10 +317,13 @@ function drawDaily(svg, rows, binLabel, cmp) {
   }
   svg.append(el('line', { class: 'axis-line', x1: m.l, x2: m.l + pw, y1: base, y2: base }));
   if (cmp) {
-    // Which side is which year, said on the chart itself rather than only in the
+    // Which side is which, said on the chart itself rather than only in the
     // legend — the reader is looking at the bars, not back up at the card head.
-    svg.append(el('text', { class: 'dlabel', x: m.l + pw + 8, y: base - 6 }, [cmp.cur]));
-    svg.append(el('text', { class: 'dlabel', x: m.l + pw + 8, y: base + 15, opacity: 0.75 }, [cmp.prev]));
+    // A year is four characters and a field name is not, so it is clipped to the
+    // margin; the legend's key carries it in full.
+    const edge = t => (t.length > 9 ? `${t.slice(0, 8)}…` : t);
+    svg.append(el('text', { class: 'dlabel', x: m.l + pw + 8, y: base - 6 }, [edge(cmp.cur)]));
+    svg.append(el('text', { class: 'dlabel', x: m.l + pw + 8, y: base + 15, opacity: 0.75 }, [edge(cmp.prev)]));
   }
 
   const every = Math.max(1, Math.ceil(rows.length / 14));
@@ -236,7 +332,7 @@ function drawDaily(svg, rows, binLabel, cmp) {
     const band = el('rect', { class: 'band', x: gx, y: m.t, width: gw, height: ph, fill: 'transparent' });
     svg.append(band);
 
-    SERIES.forEach((s, si) => {
+    series.forEach((s, si) => {
       const bx = gx + 2 + si * slot;
       const v = r[s.key];
       if (has(v)) svg.append(el('path', { d: barPath(bx, y(v), bw, base - y(v)), fill: s.color }));
@@ -252,7 +348,9 @@ function drawDaily(svg, rows, binLabel, cmp) {
       band.classList.add('on');
       // Each gauge names itself here, so the old "which station did this figure
       // come from" footnote has nothing left to explain.
-      showTip(e, cmp ? `${r.date} vs ${r.cdate ?? '—'}` : r.date, SERIES.map(s => ({
+      // Two fields share one date, so only a year comparison has a second one
+      // to name here.
+      showTip(e, cmp?.kind === 'year' ? `${r.date} vs ${r.cdate ?? '—'}` : r.date, series.map(s => ({
         k: `<span class="dot" style="background:${s.color}"></span>${esc(s.label)}`,
         v: (has(r[s.key]) ? `${fmt(r[s.key])}"` : 'no report')
           + (cmp ? ` <span class="prev">${has(r[`c:${s.key}`]) ? `${fmt(r[`c:${s.key}`])}"` : 'no report'}</span>` : ''),
@@ -268,14 +366,16 @@ function drawDaily(svg, rows, binLabel, cmp) {
 
 /* ---------- Chart 2: cumulative lines ---------- */
 /**
- * `cmp` — `{ cur, prev }` — overlays the comparison year directly rather than
+ * `cmp` — `{ kind, cur, prev }` — overlays the comparison directly rather than
  * shifting it. Two cumulative lines that start from the same zero on the same
  * day of the calendar are meant to be read against each other, and the gap
  * between them at any point *is* the answer; moving one sideways would turn
- * that gap into a lie. The year is carried by the dash, the same hue per source
- * on both, so a source is still one colour across both years.
+ * that gap into a lie. The other side is carried by the dash, the same hue per
+ * source on both, so a source stays one colour across both years — or across
+ * both fields, where the gap between a solid line and its dashed twin is how
+ * much further apart the ground is than the sources are.
  */
-function drawCumulative(svg, rows, cmp, binLabel = mdy) {
+function drawCumulative(svg, rows, cmp, binLabel, series) {
   // Right margin holds the direct end-labels, which are mandatory at 4 series —
   // and carry both years' totals when comparing, so they need more room.
   const W = 1100, H = 280, m = { t: 14, r: cmp ? 168 : 124, b: 34, l: 44 };
@@ -295,9 +395,11 @@ function drawCumulative(svg, rows, cmp, binLabel = mdy) {
     let a = 0;
     cum[key] = rows.slice(start).map(r => (a += r[key] ?? 0));
   };
-  for (const s of SERIES) { run(s.key); if (cmp) run(`c:${s.key}`); }
-  const drawn = SERIES.filter(s => cum[s.key] || (cmp && cum[`c:${s.key}`]));
+  for (const s of series) { run(s.key); if (cmp) run(`c:${s.key}`); }
+  const drawn = series.filter(s => cum[s.key] || (cmp && cum[`c:${s.key}`]));
   if (!drawn.length) return;
+  // `cum` only ever holds the series that were passed in, so a series the legend
+  // has put away is off the axis too — the rest re-scale to fill the plot.
   const max = Math.max(0.1, ...Object.values(cum).map(c => c.at(-1)));
   const { top, ticks } = niceTicks(max);
   const x = i => m.l + (rows.length === 1 ? pw / 2 : (i / (rows.length - 1)) * pw);
@@ -316,8 +418,8 @@ function drawCumulative(svg, rows, cmp, binLabel = mdy) {
     'stroke-dasharray': dash ? CMP_DASH : null, opacity: dash ? 0.85 : null,
   });
 
-  // Last year underneath: this year is the line being read, and where the two
-  // run together the solid one should be the one on top.
+  // The comparison underneath: the solid line is the one being read, and where
+  // the two run together it should be the one on top.
   if (cmp) for (const s of drawn) if (cum[`c:${s.key}`]) {
     svg.append(path(`c:${s.key}`, s.color, true));
     // Hollow end-marker against this year's filled one — the same solid/outline
@@ -350,7 +452,7 @@ function drawCumulative(svg, rows, cmp, binLabel = mdy) {
   for (const e of ends) {
     // The margin holds roughly this much text; a COOP station name can be far
     // longer than the label slot, and the legend spells it out in full. Both
-    // years share one label rather than getting one each: fourteen end-labels
+    // sides share one label rather than getting one each: fourteen end-labels
     // on a 230px plot is not a label layer, it is a wall.
     const cap = cmp ? 11 : 13;
     const name = e.s.label.length > cap ? `${e.s.label.slice(0, cap - 1)}…` : e.s.label;
@@ -375,7 +477,8 @@ function drawCumulative(svg, rows, cmp, binLabel = mdy) {
       const j = i - from[key];
       return !cum[key] || j < 0 ? 'not collecting yet' : `${cum[key][j].toFixed(2)}${unit}`;
     };
-    showTip(e, cmp ? `Through ${rows[i].date} vs ${rows[i].cdate ?? '—'}` : `Through ${rows[i].date}`,
+    showTip(e, cmp?.kind === 'year' ? `Through ${rows[i].date} vs ${rows[i].cdate ?? '—'}`
+      : `Through ${rows[i].date}`,
       drawn.map(s => ({
         k: `<span class="dot" style="background:${s.color}"></span>${esc(s.label)}`,
         v: through(s.key, '"') + (cmp ? ` <span class="prev">${through(`c:${s.key}`, '"')}</span>` : ''),
@@ -385,15 +488,47 @@ function drawCumulative(svg, rows, cmp, binLabel = mdy) {
 }
 
 /* ---------- Chart 3: field comparison, horizontal bars ---------- */
-function drawFields(svg, summaries, fields, activeId) {
-  const rowH = 30, m = { t: 8, r: 130, b: 26, l: 132 };
+/**
+ * Season to date, one bar per field — or, when two years are being compared,
+ * both of those years for every field at once. Which farm was wetter in 1996
+ * than in 2012 is a question about all of the ground, not about the one field
+ * the charts above are drawn for.
+ *
+ * The paired bars are **whole calendar years** while the charts above show
+ * whatever window was picked, and the heading and the note both say so. Making
+ * them agree would mean a per-field total for an arbitrary window, and this card
+ * is answered out of one small pre-built file so the published copy can draw it
+ * too — an arbitrary window for every field means shipping every field's daily
+ * history to the browser to draw one bar apiece. A year is the unit this gets
+ * asked in, so the honest fix is to label it rather than to fake it.
+ *
+ * Same encoding as the charts above: the comparison year sits under its
+ * counterpart and is faded, never given a second hue.
+ */
+function drawFields(svg, summaries, fields, activeId, cmp, totals) {
+  const pair = cmp?.kind === 'year' ? cmp : null;
+  const rowH = pair ? 48 : 30, m = { t: 8, r: 130, b: 26, l: 132 };
   const W = 1100, H = m.t + m.b + summaries.length * rowH;
   const pw = W - m.l - m.r;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.replaceChildren();
 
   const name = id => fields.find(f => f.id === id)?.name ?? id;
+  // Year to date on both sides whenever one of the two years is this one: this
+  // one is not finished, and a whole 1996 set against eight months of 2026 is
+  // not a comparison, it is a head start. Two years that are both over are
+  // compared whole.
+  const partial = !!pair && [pair.cur, pair.prev].includes(todayIso().slice(0, 4));
+  const yearVal = (id, y) => {
+    const t = (totals?.[id] ?? []).find(r => r.y === y);
+    return { v: t ? (partial ? t.ytd : t.total) : null, src: t?.src ?? null };
+  };
   const best = s => s.season.mrms ?? s.season.gauge ?? s.season.prism ?? 0;
-  const max = Math.max(0.1, ...summaries.map(best));
+  const bars = s => (pair
+    ? [{ ...yearVal(s.field_id, pair.cur), label: pair.cur },
+       { ...yearVal(s.field_id, pair.prev), label: pair.prev, down: true }]
+    : [{ v: best(s), src: null, label: null }]);
+
+  const max = Math.max(0.1, ...summaries.flatMap(s => bars(s).map(b => b.v ?? 0)));
   const { top, ticks } = niceTicks(max);
   const x = v => m.l + (v / top) * pw;
 
@@ -402,27 +537,49 @@ function drawFields(svg, summaries, fields, activeId) {
     svg.append(el('text', { class: 'tick', x: x(t), y: H - 10, 'text-anchor': 'middle' }, [t.toFixed(1)]));
   }
 
+  const SRC = { mrms: 'radar QPE', gauge: 'rain gauges', prism: 'PRISM' };
   summaries.forEach((s, i) => {
-    const yc = m.t + i * rowH, v = best(s), bh = 15;
-    const active = s.field_id === activeId;
+    const yc = m.t + i * rowH, bh = 15, gap = 4;
+    // Both are highlighted when two fields are being compared — neither of them
+    // is the other one.
+    const active = s.field_id === activeId || s.field_id === cmp?.id;
     svg.append(el('text', {
       class: 'dlabel', x: m.l - 10, y: yc + rowH / 2 + 4, 'text-anchor': 'end',
       fill: active ? 'var(--text-primary)' : 'var(--text-secondary)',
     }, [name(s.field_id)]));
 
     const g = el('g');
-    // Horizontal bar: the rounded data-end sits on the right, square at the baseline.
-    g.append(el('path', {
-      d: hbarPath(m.l, yc + (rowH - bh) / 2, Math.max(0.5, x(v) - m.l), bh),
-      fill: 'var(--series-gauge)', opacity: active ? 1 : 0.55,
-    }));
-    g.append(el('text', { class: 'dlabel', x: x(v) + 10, y: yc + rowH / 2 + 4 }, [`${v.toFixed(2)}"`]));
+    const list = bars(s);
+    const first = yc + (rowH - (list.length * bh + (list.length - 1) * gap)) / 2;
+    list.forEach((b, k) => {
+      const by = first + k * (bh + gap);
+      // Horizontal bar: the rounded data-end sits on the right, square at the baseline.
+      g.append(el('path', {
+        d: hbarPath(m.l, by, Math.max(0.5, x(b.v ?? 0) - m.l), bh),
+        fill: 'var(--series-gauge)', opacity: (b.down ? CMP_FADE : 1) * (active ? 1 : 0.55),
+      }));
+      // The year rides on the value label as well as on position: two bars a few
+      // pixels apart is a weak signal on its own, and this row is read across.
+      g.append(el('text', {
+        class: 'dlabel', x: x(b.v ?? 0) + 10, y: by + bh / 2 + 4, opacity: b.down ? 0.8 : 1,
+      }, [has(b.v) ? `${b.v.toFixed(2)}"${b.label ? ` ${b.label}` : ''}` : `— ${b.label ?? ''}`]));
+    });
+
     const hit = el('rect', { class: 'hit', x: m.l, y: yc, width: pw, height: rowH });
-    hit.addEventListener('mousemove', e => showTip(e, name(s.field_id), [
-      { k: 'Season to date', v: `${v.toFixed(2)}"` },
-      { k: 'Last 7 days', v: `${fmt(s.d7.mrms ?? s.d7.gauge)}"` },
-      { k: 'Days since rain', v: s.days_since_rain ?? '—' },
-    ]));
+    hit.addEventListener('mousemove', e => showTip(e, name(s.field_id),
+      pair
+        ? list.map(b => ({ k: b.label, v: has(b.v) ? `${b.v.toFixed(2)}"` : 'no record' }))
+        : [
+          { k: 'Season to date', v: `${list[0].v.toFixed(2)}"` },
+          { k: 'Last 7 days', v: `${fmt(s.d7.mrms ?? s.d7.gauge)}"` },
+          { k: 'Days since rain', v: s.days_since_rain ?? '—' },
+        ],
+      // Which source answered is part of the number before radar exists: a year
+      // measured by PRISM beside one measured by radar has to say so.
+      pair
+        ? `${partial ? `January 1st to ${mdy(todayIso())}` : 'whole calendar years'}, from `
+          + `${[...new Set(list.map(b => SRC[b.src]).filter(Boolean))].join(' and ') || 'nothing stored'}`
+        : null));
     hit.addEventListener('mouseleave', hideTip);
     g.append(hit); svg.append(g);
   });
@@ -479,26 +636,30 @@ function binRows(rows, keys, mode) {
   });
 }
 
-/* ---------- year-over-year comparison ---------- */
+/* ---------- comparison: another year, or another field ---------- */
 
 /**
- * Fold last year's rows onto this year's, matched by month and day.
+ * Fold the other side's rows onto these, so every chart, tooltip and table cell
+ * reads one row carrying both.
  *
- * Matching on the calendar square rather than on position in the array is what
- * makes a leap year behave: February 29th simply has no counterpart and stays
- * missing, in both directions, instead of shunting every later day one place
- * out of step. The dates that found no partner are returned so the note can own
- * up to them — a quarter inch that fell on the 29th of February is not nothing,
- * and neither is a day this year that nothing was collected for.
+ * `keyOf` is what the two sides are matched on, and it is the whole difference
+ * between the two comparisons. Another **year** matches on the calendar square,
+ * which is what makes a leap year behave: February 29th simply has no
+ * counterpart and stays missing, in both directions, instead of shunting every
+ * later day one place out of step. Safe because no range that offers a year
+ * comparison exceeds a year, so a month-day appears at most once on each side.
+ * Another **field** matches on the date itself — same days, different ground —
+ * and needs no such care.
  *
- * Safe because no range offered here exceeds a year, so a month-day appears at
- * most once on each side.
+ * The dates that found no partner are returned so the note can own up to them:
+ * a quarter inch that fell on the 29th of February is not nothing, and neither
+ * is a day the other field has no row for because it was added last spring.
  */
-function mergeCompare(rows, prev, keys) {
-  const by = new Map(prev.map(r => [monthDay(r.date), r]));
+function mergeCompare(rows, prev, keys, keyOf) {
+  const by = new Map(prev.map(r => [keyOf(r.date), r]));
   const matched = new Set();
   for (const r of rows) {
-    const p = by.get(monthDay(r.date));
+    const p = by.get(keyOf(r.date));
     if (!p) continue;
     matched.add(p.date);
     r.cdate = p.date;
@@ -510,6 +671,28 @@ function mergeCompare(rows, prev, keys) {
 /* ---------- app ---------- */
 let META = null;
 const $ = id => document.getElementById(id);
+
+/**
+ * What the two upper charts are currently drawn from.
+ *
+ * `load()` fetches and computes; this paints. They are separate because the
+ * legend can put a series away, and that has to be a redraw of rows the page
+ * already holds rather than a fresh round trip — over FTP-published files, a
+ * refetch would mean re-downloading a chunk to hide a line.
+ */
+let view = null;
+
+function renderCharts() {
+  if (!view) return;
+  const { chartRows, cumRows, bin, cmp, starts } = view;
+  const shown = shownSeries();
+  // The legends carry the full SERIES, not the visible ones — a series that has
+  // been hidden has to stay clickable, and stays struck through until it is.
+  legendInto($('legendDaily'), SERIES, starts, cmp ? yearKeyHtml('bars', cmp.cur, cmp.prev) : '');
+  legendInto($('legendCum'), SERIES, starts, cmp ? yearKeyHtml('lines', cmp.cur, cmp.prev) : '');
+  drawDaily($('chartDaily'), chartRows, binLabeller(bin), cmp, shown);
+  drawCumulative($('chartCum'), cumRows, cmp, binLabeller(bin), shown);
+}
 
 /* ---------- farm filter ---------- */
 // Empty set means "all farms" — an explicit all-selected state would silently
@@ -644,11 +827,25 @@ function wireCoordPaste(form) {
  * "Year to date" is the one range whose length changes as the year runs, which
  * is exactly why it is worth having: in August it is the number anyone actually
  * argues about, and a fixed 30/90/365 never lands on January 1st.
+ *
+ * `year` slides the whole window bodily into another year, keeping its
+ * month-days: the last 30 days of 1996 are the same thirty squares of the
+ * calendar the last 30 days of this year are. That is what lets a comparison be
+ * 1996 against 1988 with neither side being now — and it is why the shift is
+ * here, on the window, rather than in the comparison: the two halves are then
+ * the same kind of thing, and either one can be any year.
  */
-function rangeWindow() {
+function rangeWindow(year) {
   const v = $('rangeSel').value;
-  const to = todayIso();
-  if (v === 'ytd') return { from: `${to.slice(0, 4)}-01-01`, to };
+  const now = todayIso();
+  const thisYear = now.slice(0, 4);
+  const to = year && year !== thisYear ? shiftYears(now, Number(year) - Number(thisYear)) : now;
+  const y = to.slice(0, 4);
+  if (v === 'ytd') return { from: `${y}-01-01`, to };
+  // A finished year runs to December 31st and this one runs to today: there is
+  // nothing after today, and a chart drawn to the end of December would put four
+  // blank months on the axis where a reader sees "dry".
+  if (v === 'year') return { from: `${y}-01-01`, to: y === thisYear ? now : `${y}-12-31` };
   // "All history" is a question, not a number of days: PRISM reaches back to
   // 1981 and IEMRE further, so how much there is depends on how deep a backfill
   // has been run. A floor no record predates asks for whatever exists.
@@ -656,59 +853,122 @@ function rangeWindow() {
   return { from: addDaysIso(to, -Number(v)), to };
 }
 
-/** Keep the comparison picker's options in step with what the field has, without
- *  dropping a selection the reader made. */
-function refreshCompareSelect(years, cur, locked) {
+/**
+ * Which year the range is measured back from.
+ *
+ * A year the field has no rows for stays in the list while it is selected, named
+ * as empty. Dropping it would reset the picker to this year without the charts
+ * moving, so the page would be showing one year and saying another.
+ */
+function refreshYearSelect(years, want, thisYear) {
+  const sel = $('yearSel');
+  const list = (years ?? []).filter(y => y !== thisYear);
+  const orphan = want && want !== thisYear && !list.includes(want) ? want : null;
+  sel.innerHTML = '<option value="">This year</option>'
+    + (orphan ? `<option value="${orphan}">${orphan} (no records)</option>` : '')
+    + list.map(y => `<option value="${y}">${y}</option>`).join('');
+  sel.value = orphan || list.includes(want) ? want : '';
+  return sel.value;
+}
+
+/**
+ * One picker, two kinds of comparison, and a value that says which — `y:1996`
+ * or `f:north80`.
+ *
+ * Grouped in a single select rather than split into two, because they are
+ * alternatives and not options: a second year *and* a second field at once is
+ * four lines per source, which is a thicket rather than a comparison. A single
+ * select is the one control that cannot be in both states at once, so the limit
+ * needs no rule and no message to explain it.
+ *
+ * Above a 366-day range the year half is disabled rather than dropped: the
+ * label is where the reason gets said, and an empty space says nothing.
+ */
+function refreshCompareSelect(years, baseYear, fields, fieldId, lockYears) {
   const sel = $('cmpSel');
   const want = sel.value;
-  const opts = locked ? [] : (years ?? []).filter(y => y !== cur);
-  sel.innerHTML = `<option value="">${locked ? 'Range over a year' : 'No comparison'}</option>`
-    + opts.map(y => `<option value="${y}">${y}</option>`).join('');
-  sel.value = opts.includes(want) ? want : '';
-  sel.disabled = !!locked;
+  const yearOpts = (years ?? []).filter(y => y !== baseYear);
+  const fieldOpts = fields.filter(f => f.id !== fieldId);
+  const group = (label, opts, off) => (opts.length
+    ? `<optgroup label="${esc(label)}"${off ? ' disabled' : ''}>${opts.join('')}</optgroup>` : '');
+  sel.innerHTML = '<option value="">No comparison</option>'
+    + group(lockYears ? 'Another year — pick a range under a year' : 'Another year',
+      yearOpts.map(y => `<option value="y:${y}">${y}</option>`), lockYears)
+    + group('Another field', fieldOpts.map(f => `<option value="f:${esc(f.id)}">${esc(f.name)}</option>`));
+  const live = new Set([...(lockYears ? [] : yearOpts.map(y => `y:${y}`)),
+    ...fieldOpts.map(f => `f:${f.id}`)]);
+  sel.value = live.has(want) ? want : '';
   return sel.value;
 }
 
 async function load() {
   const fieldId = $('fieldSel').value;
-  const { from, to } = rangeWindow();
+  const thisYear = todayIso().slice(0, 4);
+  const baseYear = $('yearSel').value;
+  const { from, to } = rangeWindow(baseYear);
   const days = daysBetweenIso(from, to);
   // A window longer than a year has no year-over-year overlay, and that is a
   // correctness limit rather than a missing feature: the two years are folded
   // together on month-day, which stops being a unique key the moment a range
-  // can contain the same calendar square twice.
+  // can contain the same calendar square twice. Comparing two *fields* has no
+  // such limit — those rows are matched on the date itself.
   const overAYear = days > 366;
-  // Read before the fetch so both years go out together; the option list is
+  // Read before the fetch so both halves go out together; the option lists are
   // reconciled against the answer afterwards.
-  const cmpYear = overAYear ? '' : $('cmpSel').value;
+  const asked = $('cmpSel').value;
+  const cmpYear = !overAYear && asked.startsWith('y:') ? asked.slice(2) : '';
+  const cmpField = asked.startsWith('f:') ? asked.slice(2) : '';
   const shift = cmpYear ? Number(cmpYear) - Number(to.slice(0, 4)) : 0;
-  const [{ rows, gauges, uncharted, years }, cmpRes, { summaries }, cal] = await Promise.all([
-    fetch(`/api/series?field=${fieldId}&from=${from}&to=${to}`).then(r => r.json()),
+  // Looking at a year that is not this one: every KPI tile is a window ending
+  // today and always will be, so the year on screen needs a tile of its own.
+  const past = baseYear && baseYear !== thisYear ? baseYear : null;
+  // The only years the page can draw a total for — the tile's, and the two on
+  // the all-fields bars. Asked for by name because totalling every stored year
+  // is a full scan of `obs`, and this fetch happens on every picker change; see
+  // the note in src/views.js. The published copy ignores the parameter and
+  // answers with every year out of its one pre-built file, which is why the
+  // shape is the same either way and the caller just looks up the year it wants.
+  const wantYears = [...new Set([past, cmpYear && to.slice(0, 4), cmpYear].filter(Boolean))];
+  const [{ rows, gauges, uncharted, years }, cmpRes, { summaries, yearTotals }, cal] = await Promise.all([
+    apiGet(`/api/series?field=${fieldId}&from=${from}&to=${to}`),
     cmpYear
-      ? fetch(`/api/series?field=${fieldId}&from=${shiftYears(from, shift)}&to=${shiftYears(to, shift)}`)
-        .then(r => r.json())
+      ? apiGet(`/api/series?field=${fieldId}&from=${shiftYears(from, shift)}&to=${shiftYears(to, shift)}`)
+      : cmpField ? apiGet(`/api/series?field=${cmpField}&from=${from}&to=${to}`)
       : null,
-    fetch('/api/summary').then(r => r.json()),
-    fetch('/api/calibration').then(r => r.json()),
+    apiGet(`/api/summary${wantYears.length ? `?years=${wantYears.join(',')}` : ''}`),
+    apiGet('/api/calibration'),
   ]);
   const curYear = to.slice(0, 4);
-  const picked = refreshCompareSelect(years, curYear, overAYear);
+  const fieldName = id => META.fields.find(f => f.id === id)?.name ?? id;
+  refreshYearSelect(years, baseYear, thisYear);
+  const picked = refreshCompareSelect(years, curYear, visibleFields(), fieldId, overAYear);
   // The picker can lose the selection when the field changes — a field added
-  // last spring has no 2024. Nothing is drawn for a year that is not offered.
-  const cmp = picked && picked === cmpYear && cmpRes?.rows?.length
-    ? { cur: curYear, prev: cmpYear } : null;
+  // last spring has no 2024, and a farm filter can take the other field off the
+  // list. Nothing is drawn for a comparison that is no longer on offer.
+  const live = picked === asked && cmpRes?.rows?.length;
+  const cmp = live && cmpYear ? { kind: 'year', cur: curYear, prev: cmpYear }
+    : live && cmpField
+      ? { kind: 'field', id: cmpField, cur: fieldName(fieldId), prev: fieldName(cmpField) }
+      : null;
   // The picker offers a year the field has *some* data for, which is not the
   // same as data for these dates — a field added in June has a 2024, just not a
   // February. Saying so beats an overlay that silently does not appear.
   const cmpEmpty = picked && !cmp;
   // Scoped to the field on screen: its gauges, in its order. A field with no
   // gauge in range draws the gridded sources and nothing else, rather than a
-  // permanent "no data yet" for a gauge it does not have.
-  SERIES = [...gaugeSeries(gauges ?? []), ...GRID_SERIES];
-  // Last year folded onto this year's rows, so the charts, the tooltips and the
-  // table all read one row per calendar day carrying both years.
-  const missed = cmp ? mergeCompare(rows, cmpRes.rows, SERIES.map(s => s.key)) : [];
+  // permanent "no data yet" for a gauge it does not have. Against another field
+  // the gauges collapse to the derived per-field figure — see fieldSeries.
+  SERIES = cmp?.kind === 'field'
+    ? fieldSeries(rows, cmpRes.rows)
+    : [...gaugeSeries(gauges ?? []), ...GRID_SERIES];
+  // The other side folded onto these rows, so the charts, the tooltips and the
+  // table all read one row per calendar day carrying both.
+  const missed = cmp
+    ? mergeCompare(rows, cmpRes.rows, SERIES.map(s => s.key),
+      cmp.kind === 'year' ? monthDay : (d => d))
+    : [];
   const me = summaries.find(s => s.field_id === fieldId) ?? {};
+  const other = cmp?.kind === 'field' ? summaries.find(s => s.field_id === cmp.id) ?? {} : null;
   const field = META.fields.find(f => f.id === fieldId);
 
   // KPI tiles. Radar is the field-specific number; gauge is shown beside it so
@@ -717,12 +977,17 @@ async function load() {
   // Headline prefers the finest grid that actually has a value. RFC QPE only
   // exists from the day it was switched on, so older windows fall back to MRMS
   // and the tile says which one it is rather than quietly mixing them.
+  const headline = d => {
+    const fine = has(d.rfcqpe) && d.rfcqpe > 0;
+    return {
+      v: fine ? d.rfcqpe : d.mrms,
+      src: fine ? 'RFC QPE, ~2.5 mi grid' : 'Radar QPE, ~7 mi grid',
+      col: fine ? 'var(--series-rfcqpe)' : 'var(--series-mrms)',
+    };
+  };
   const tile = (label, w, extra) => {
     const d = pick(w);
-    const fine = has(d.rfcqpe) && d.rfcqpe > 0;
-    const r = fine ? d.rfcqpe : d.mrms;
-    const src = fine ? 'RFC QPE, ~2.5 mi grid' : 'Radar QPE, ~7 mi grid';
-    const col = fine ? 'var(--series-rfcqpe)' : 'var(--series-mrms)';
+    const { v: r, src, col } = headline(d);
     // A line per gauge rather than one "gauge" figure: two gauges that read
     // differently over the same week is the thing worth seeing at a glance,
     // and it is exactly what a single number was hiding. Names are clipped by
@@ -730,13 +995,32 @@ async function load() {
     const lines = SERIES.filter(s => s.gauge).map(s =>
       `<div class="meta" title="${esc(s.label)}"><span class="swatch" style="background:${s.color}"></span>`
       + `${esc(s.label)} ${has(d[s.key]) ? d[s.key].toFixed(2) + '"' : 'no report'}</div>`).join('');
+    // The other field's figure for the same window, on the same tile. Comparing
+    // two fields and then having to hold four numbers in your head to read the
+    // tiles is how the charts below end up being the only honest part of the page.
+    const vs = other ? headline(other[w] ?? {}) : null;
+    const vsLine = vs
+      ? `<div class="meta" title="${esc(cmp.prev)}"><span class="swatch" style="background:${vs.col}"></span>`
+        + `${esc(cmp.prev)} ${has(vs.v) ? vs.v.toFixed(2) + '"' : 'no report'}</div>`
+      : '';
     return `<div class="tile"><div class="label">${label}</div>
       <div class="value">${has(r) ? r.toFixed(2) : '—'}<span class="unit">in</span></div>
       <div class="meta"><span class="swatch" style="background:${col}"></span>${src}</div>
-      ${lines}${extra ? `<div class="meta">${extra}</div>` : ''}</div>`;
+      ${lines}${vsLine}${extra ? `<div class="meta">${extra}</div>` : ''}</div>`;
   };
   const dry = me.days_since_rain;
+  // `past` is settled before the fetch, because it decides which years are
+  // asked for. Without a tile of its own "Season to date" would read as the
+  // season on the charts rather than the one ending today.
+  const yt = past ? (yearTotals?.[fieldId] ?? []).find(t => t.y === past) : null;
+  const YT_SRC = { mrms: 'Radar QPE', gauge: 'Rain gauges', prism: 'PRISM' };
   $('kpis').innerHTML =
+    (past
+      ? `<div class="tile"><div class="label">${past}, whole year</div>
+         <div class="value">${has(yt?.total) ? yt.total.toFixed(2) : '—'}<span class="unit">in</span></div>
+         <div class="meta">${yt ? esc(YT_SRC[yt.src] ?? yt.src) : 'nothing stored for this field'}</div>
+         <div class="meta">the tiles beside it are today's, as always</div></div>`
+      : '') +
     tile('Last 24 hours', 'd1') +
     tile('Last 7 days', 'd7') +
     tile('Last 30 days', 'd30') +
@@ -764,20 +1048,29 @@ async function load() {
         ? `${rows[0].date.slice(0, 4)} to ${rows.at(-1).date.slice(0, 4)}. Before 2014 the only gridded source is PRISM — and IEMRE behind it — so radar QPE is absent rather than zero for those years. `
         : '')
     + (cmp
-        ? `${cmp.cur} is drawn above the line and ${cmp.prev} below it, same colour per source and the same scale on both halves, so the longer side is the wetter year. Matched by month and day. `
+        ? `${cmp.cur} is drawn above the line and ${cmp.prev} below it, same colour per source and the same scale on both halves, so the longer side is the wetter one. `
+          + (cmp.kind === 'year' ? 'Matched by month and day. ' : 'Same days, different ground. ')
         : '')
     + (cmpEmpty
-        ? `Nothing is drawn for ${picked}: this field has no readings between ${shiftYears(from, shift)} and ${shiftYears(to, shift)}. `
+        ? `Nothing is drawn for ${cmpYear || fieldName(cmpField)}: no readings between `
+          + `${cmpYear ? shiftYears(from, shift) : from} and ${cmpYear ? shiftYears(to, shift) : to}. `
         : '')
     + (missed.length
-        ? `${missed.length === 1 ? `${missed[0]} is` : `${missed.length} days in ${cmp.prev} are`} left out — nothing on this year's side of the calendar to line up with (February 29th, or a day this field has no row for). `
+        ? `${missed.length === 1 ? `${missed[0]} is` : `${missed.length} days in ${cmp.prev} are`} left out — nothing on `
+          + `${cmp.kind === 'year' ? "this year's side of the calendar" : `${cmp.cur}'s side`} to line up with `
+          + `(${cmp.kind === 'year' ? 'February 29th, or ' : ''}a day this field has no row for). `
         : '')
-    + 'Each gauge is drawn on its own; where two of them disagree, that is two readings of two different pieces of ground, not an error. '
+    + (cmp?.kind === 'field'
+        ? 'Two fields cannot be charted gauge by gauge — this field\'s nearest station and that one\'s are different ground — so the gauges collapse to one figure per field: the nearest one that reported that day. '
+        : 'Each gauge is drawn on its own; where two of them disagree, that is two readings of two different pieces of ground, not an error. ')
     + 'PRISM and RFC QPE both run on a 12Z–12Z day, so a single storm can land on either side of midnight local; compare those over a week, not a day. '
     + (rfcFrom
         ? `RFC QPE is the finest grid here — about 2.5 miles across, roughly a section and a half — but it publishes no archive, so it only exists from ${rfcFrom} forward.`
         : 'RFC QPE (about 2.5 miles across) starts collecting on the next ingest — it publishes no archive, so it cannot be backfilled.')
-    + (uncharted?.length
+    // Silent only while the individual gauges are on the chart at all: against
+    // another field they have all collapsed into one figure, and there is no cap
+    // left to own up to.
+    + (uncharted?.length && cmp?.kind !== 'field'
         ? ` ${uncharted.join(' and ')} also count${uncharted.length === 1 ? 's' : ''} for this field but ${uncharted.length === 1 ? 'is' : 'are'} not drawn — there are four gauge colours that stay apart from each other and from the grid.`
         : '');
   // Flag series that only start partway through the range, so a short line
@@ -790,14 +1083,16 @@ async function load() {
     if (i > 0) starts[s.key] = `from ${span > 366 ? rows[i].date : mdy(rows[i].date)}`;
     else if (i < 0) starts[s.key] = 'no data yet';
   }
-  legendInto($('legendDaily'), SERIES, starts, cmp ? yearKeyHtml('bars', cmp.cur, cmp.prev) : '');
-  legendInto($('legendCum'), SERIES, starts, cmp ? yearKeyHtml('lines', cmp.cur, cmp.prev) : '');
-  drawDaily($('chartDaily'), chartRows, binLabeller(bin), cmp);
-  // The cumulative line runs off the binned rows once the range is measured in
-  // years: the curve is identical at every bin boundary, and a single path of
-  // sixteen thousand points is a quarter-megabyte of `d` attribute for detail
-  // no one can see at this width.
-  drawCumulative($('chartCum'), bin === 'month' || bin === 'year' ? chartRows : rows, cmp, binLabeller(bin));
+  // Held so the legend can redraw without asking the server for rows it already
+  // has. The cumulative line runs off the binned rows once the range is measured
+  // in years: the curve is identical at every bin boundary, and a single path of
+  // sixteen thousand points is a quarter-megabyte of `d` attribute for detail no
+  // one can see at this width.
+  view = {
+    chartRows, cumRows: bin === 'month' || bin === 'year' ? chartRows : rows,
+    bin, cmp, starts,
+  };
+  renderCharts();
   // Years inside the range that returned nothing at all.
   //
   // The cumulative chart spaces its points by position, not by date, so a year
@@ -817,16 +1112,34 @@ async function load() {
       + 'closes that gap up rather than leaving a hole — the totals are of what is stored, not of an unbroken run. '
       + '"Pull all history" under Data collection fills them in.'
     : '';
-  $('cumNote').textContent = (cmp
+  $('cumNote').textContent = (cmp?.kind === 'year'
     ? `Both years accumulate from the same day of the calendar, so the vertical gap between a solid line and its dashed twin is how far ahead or behind ${cmp.cur} is running. `
       + 'Day-level binning differences wash out over a range like this, so a gap that keeps widening is a real disagreement about this field.'
+    : cmp
+    ? `Both fields accumulate over the same days, so the vertical gap between a solid line and its dashed twin is how far ahead or behind ${cmp.prev} is running against ${cmp.cur}. `
+      + 'Where the gridded sources agree between the two fields and the gauges do not, that is the gauges being somewhere the grid has smoothed over.'
     : 'Accumulates across the range chosen above, not the whole season. This is the honest way to compare sources — day-level binning differences wash out, '
       + 'so a gap that keeps widening is a real disagreement about this field. Two gauges drifting apart over a month is the clearest reading you get of how much a few miles matters here.')
     + gapNote;
   const shown = visibleFields();
   const scope = farmSel.size ? ` ${shown.length} of ${META.fields.length} fields shown for the selected farm${farmSel.size > 1 ? 's' : ''}.` : '';
-  $('fieldsNote').textContent = `Radar QPE totals since ${META.seasonStart}. Selected field highlighted.${scope}`;
-  drawFields($('chartFields'), summaries.filter(s => shown.some(f => f.id === s.field_id)), META.fields, fieldId);
+  // These bars are the one card that answers for every field at once, so when
+  // two years are being compared they answer for both — and say, out loud, that
+  // they are whole calendar years while the charts above are a chosen window.
+  const yearPair = cmp?.kind === 'year';
+  const bothOver = yearPair && ![cmp.cur, cmp.prev].includes(thisYear);
+  $('fieldsTitle').textContent = yearPair
+    ? `All fields, ${cmp.cur} against ${cmp.prev}` : 'All fields, season to date';
+  $('fieldsNote').textContent = (yearPair
+    ? `${cmp.cur} above, ${cmp.prev} below, for every field — ${bothOver ? 'whole calendar years'
+        : `January 1st to ${mdy(todayIso())} in both years, because ${thisYear} is not finished`}. `
+      + 'That is a different window from the charts above, which cover the range picked at the top. '
+      + 'Radar QPE where it exists, this field\'s gauges before it does — the tooltip names which. '
+    : `Radar QPE totals since ${META.seasonStart}. `)
+    + (cmp?.kind === 'field' ? 'Both compared fields highlighted.' : 'Selected field highlighted.')
+    + scope;
+  drawFields($('chartFields'), summaries.filter(s => shown.some(f => f.id === s.field_id)),
+    META.fields, fieldId, cmp, yearTotals);
 
   // Calibration: how the gridded products compare to the on-farm gauge.
   if (cal && cal.months?.length) {
@@ -873,15 +1186,29 @@ async function load() {
     `<tr><td>${r.date}</td>${SERIES.map(s =>
       cell(r[s.key]) + (cmp ? cell(r[`c:${s.key}`]) : '')).join('')}</tr>`).join('');
 
-  renderExclusions(field);
-  renderFields();
-  renderStation();
-  renderHistory();
-
-  $('csvBtn').href = `/api/export.csv?field=${fieldId}&days=${Math.max(days, 400)}`;
+  // The admin panels are refreshed here because they are scoped to the field on
+  // screen. None of them exist in the published copy — the markup is cut, not
+  // hidden — so they are skipped rather than guarded one lookup at a time.
+  if (!STATIC) {
+    renderExclusions(field);
+    renderFields();
+    renderStation();
+    renderHistory();
+    // `days` counts back from today, which is the right thing while today is on
+    // screen — it exports at least a year whatever the charts are showing. Once
+    // the Year picker has moved the window into 1996 it is the wrong thing
+    // entirely, so that case exports the window itself.
+    $('csvBtn').href = past
+      ? `/api/export.csv?field=${fieldId}&from=${from}&to=${to}`
+      : `/api/export.csv?field=${fieldId}&days=${Math.max(days, 400)}`;
+  }
   $('subtitle').textContent = [
     field.farm ? `${field.farm} · ${field.name}` : field.name,
-    `${field.lat.toFixed(4)}, ${field.lon.toFixed(4)}`,
+    // Coordinates are optional: the published copy can withhold them, and a
+    // field that says where it is is exactly the thing worth withholding on a
+    // public host. Checked rather than defaulted — Number(undefined) is NaN and
+    // `0.0000, 0.0000` would be a confident answer off the Gulf of Guinea.
+    has(field.lat) && has(field.lon) ? `${field.lat.toFixed(4)}, ${field.lon.toFixed(4)}` : null,
     field.acres ? `${field.acres} ac` : null,
   ].filter(Boolean).join(' · ');
   $('footer').textContent = `Sources: MRMS radar QPE and PRISM via IEM reanalysis; gauges via NWS COOP/ASOS and Kansas Mesonet. Last ingest ${META.lastIngest ?? 'never'} UTC.`;
@@ -1120,6 +1447,11 @@ async function startJob(job, extra = {}) {
 function wireJobs() {
   $('jobIngest').addEventListener('click', () => startJob('ingest', { note: 'requested from the dashboard' }));
   $('jobDiscover').addEventListener('click', () => startJob('discover', { note: 'requested from the dashboard' }));
+  // Only offered where publishing is switched on. The copy normally goes out by
+  // itself after each collection run, so this is for "I changed something and
+  // want it on the web now" rather than routine use.
+  $('jobPublish').hidden = !META.publishing;
+  $('jobPublish').addEventListener('click', () => startJob('publish', { note: 'requested from the dashboard' }));
   wireHistory();
   pollJobs();
 }
@@ -1608,9 +1940,16 @@ function renderFields() {
   }));
 }
 
-(async function init() {
-  META = await fetch('/api/fields').then(r => r.json());
-
+/**
+ * Everything that can change something: forms, job buttons, import, restore.
+ *
+ * Grouped so the published copy can skip it in one place. It is not defensive —
+ * every $() in here would throw on the static build, because the markup it
+ * reaches for has been cut out of the page rather than hidden. That is the
+ * intent: a read-only mirror should not carry a disabled copy of the controls
+ * for a machine the reader cannot reach.
+ */
+async function wireAdmin() {
   $('addField').addEventListener('submit', async e => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
@@ -1653,10 +1992,16 @@ function renderFields() {
   $('addReading').date.value = todayIso();
   $('addReading').date.max = $('addReading').date.value;
   await renderGauges();
+}
+
+(async function init() {
+  META = await apiGet('/api/fields');
+  if (!STATIC) await wireAdmin();
 
   renderFarmFilter();
   refreshFieldSelect();
   $('fieldSel').addEventListener('change', load);
+  $('yearSel').addEventListener('change', load);
   $('rangeSel').addEventListener('change', load);
   $('cmpSel').addEventListener('change', load);
   $('themeBtn').addEventListener('click', () => {

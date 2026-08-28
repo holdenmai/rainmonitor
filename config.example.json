@@ -96,5 +96,30 @@
     "auto": true,
     "intervalHours": 6,
     "_autoComment": "The dashboard collects rainfall itself while it is running: every 15 minutes it checks whether the last run is older than intervalHours and pulls if so. Catch-up rather than clock scheduling, because a farm computer is off as often as it is on and a fixed 7:15 task on a machine that boots at 9 simply never runs. Set auto to false only if you would rather drive it from a scheduled task and `npm run ingest`."
+  },
+
+  "publish": {
+    "enabled": false,
+    "_comment": "Put a read-only copy of the charts on a web host, so the rain can be read from a phone in the pickup without opening this machine to the internet. The host only ever serves files: there is no dashboard there, nothing can be changed from it, and none of this machine's settings travel with it. `npm run publish -- --out somewhere` builds the copy without uploading anything, which is the way to see what it contains before deciding.",
+
+    "fields": [],
+    "_fieldsComment": "Which fields appear, by id — see `npm run fields`. Empty means all of them. A field that is not listed is absent from the published copy rather than hidden in it.",
+
+    "coordinates": false,
+    "calibration": false,
+    "_privacyComment": "These files sit somewhere anyone can fetch them. With coordinates false, field latitude and longitude are left out and so is the distance to every gauge — a named field plus a named gauge plus '4.2 mi' is a location whether or not a latitude was published. Names, farm and acres still appear; the page cannot tell one field from another without them. With calibration false the on-farm station card is left out, which is the thing that names that station and says where it stands.",
+
+    "ftp": {
+      "host": "",
+      "port": 21,
+      "user": "",
+      "password": "",
+      "secure": true,
+      "allowSelfSigned": false,
+      "dir": "/public_html/rain",
+      "timeoutSeconds": 60
+    },
+    "_ftpComment": "Where to send it. Leave host empty and `npm run publish` builds the folder and stops, which is the right setting if you would rather upload it by hand. secure true means explicit FTPS — the ordinary port 21, upgraded to TLS with AUTH TLS before the password is sent — and it should stay on: with it off, the password crosses the internet as plain text. Turn allowSelfSigned on only if the host's certificate is its own and you know it; it switches off the check that the server is who it says it is. SFTP is not supported, because SFTP is SSH and this program has no dependencies to implement it with.",
+    "_ftpPasswordComment": "This password sits here in the clear — FTP gives it nowhere else to live. Use an account that can write this one directory and nothing else, not the one you sign in to the web host with. config.json is gitignored, but it is still a plain file on a farm office computer."
   }
 }

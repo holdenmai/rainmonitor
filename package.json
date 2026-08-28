@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Local rainfall monitoring for farm fields: gridded QPE + nearby rain gauges, stored locally.",
-  "engines": { "node": ">=22.5.0" },
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "license": "MIT",
   "scripts": {
     "init": "node src/cli.js init",
@@ -20,7 +22,10 @@
     "import": "node src/cli.js import",
     "backup": "node src/cli.js backup",
     "restore": "node src/cli.js restore",
+    "publish": "node src/cli.js publish",
     "check": "node scripts/check-alignment.mjs",
+    "check-publish": "node scripts/check-publish.mjs",
+    "check-ftp": "node scripts/check-ftp.mjs",
     "calibrate": "node scripts/calibrate.mjs"
   }
 }
