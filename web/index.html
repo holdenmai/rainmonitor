@@ -245,7 +245,8 @@
       <div>
         <h2>Your own weather station</h2>
         <p class="note">A Davis — or anything else publishing WeatherLink's NOAA-format reports: <code>NOAAMO.txt</code> for the current month's daily rows, <code>NOAAYR.txt</code> for the year's monthly totals. It stands on your own ground, so it ranks first for whichever fields are nearest and becomes the reference the radar is checked against.</p>
-        <p class="note" style="margin-top:6px">Use the <em>station's</em> coordinates, not a field's. <strong>Test the addresses</strong> and it reads them out of the report header for you. You can also paste a <code>latitude, longitude</code> pair into either box and both fill in.</p>
+        <p class="note" style="margin-top:6px"><strong>Give it the folder the two reports sit in</strong> and both are found — or either file, and the other one is found beside it. Both matter and they do different jobs: the daily report is the only source of daily on-farm rainfall and is overwritten every month, while the yearly one is what the calibration below is measured from.</p>
+        <p class="note" style="margin-top:6px">Use the <em>station's</em> coordinates, not a field's. <strong>Test the address</strong> and it reads them out of the report header for you. You can also paste a <code>latitude, longitude</code> pair into either box and both fill in.</p>
       </div>
     </div>
     <p class="jobstatus" id="stationStatus"></p>
@@ -256,9 +257,11 @@
       <label><span>Longitude</span><input name="lon" type="number" step="any" placeholder="-101.0523" required></label>
       <label><span>Elevation <em>(ft, optional)</em></span><input name="elev_ft" type="number" step="any" placeholder="3600"></label>
       <label><span>Covers within <em>(miles)</em></span><input name="maxDistanceMi" type="number" step="any" min="0" placeholder="20"></label>
-      <label><span>Daily report <em>(NOAAMO.txt)</em></span><input class="wide" name="dailyUrl" type="url" placeholder="http://example.com/weather/NOAAMO.txt" required></label>
-      <label><span>Yearly report <em>(NOAAYR.txt, optional)</em></span><input class="wide" name="yearlyUrl" type="url" placeholder="http://example.com/weather/NOAAYR.txt"></label>
-      <button class="btn" type="button" id="stationTest">Test the addresses</button>
+      <!-- Still named dailyUrl: it is what config.json stores and what the
+           server resolves a folder into, so the wire format never changed. -->
+      <label><span>Reports address <em>(the folder, or NOAAMO.txt)</em></span><input class="wide" name="dailyUrl" type="url" placeholder="http://example.com/weather/" required></label>
+      <label><span>Yearly report <em>(only if it is not beside the daily one)</em></span><input class="wide" name="yearlyUrl" type="url" placeholder="found automatically"></label>
+      <button class="btn" type="button" id="stationTest">Test the address</button>
       <button class="btn primary" type="submit" id="stationSave">Add station</button>
       <button class="btn danger" type="button" id="stationRemove" hidden>Remove</button>
     </form>

@@ -1638,17 +1638,26 @@ function renderStation({ fill = false } = {}) {
 function wireStation() {
   $('stationTest').addEventListener('click', async () => {
     const f = $('stationForm').elements;
-    const dailyUrl = f.dailyUrl.value.trim(), yearlyUrl = f.yearlyUrl.value.trim();
-    if (!dailyUrl && !yearlyUrl) return stationMsg('Fill in the daily report address first.', true);
+    const url = f.dailyUrl.value.trim(), yearlyUrl = f.yearlyUrl.value.trim();
+    if (!url) return stationMsg('Fill in the report address first — the folder is enough.', true);
     stationMsg('Fetching the reports…');
     const r = await fetch('/api/config/station/test', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dailyUrl, yearlyUrl }),
+      body: JSON.stringify({ url, yearlyUrl }),
     }).then(res => res.json()).catch(() => null);
     if (!r) return stationMsg('Could not reach the dashboard.', true);
 
+    // Keep whatever actually answered. Pasting a folder is only a real answer if
+    // the boxes end up holding the two files it resolved to — otherwise Save
+    // would store the folder and the reader would have no idea which files are
+    // being read.
+    const found = r.resolved?.dailyUrl && r.resolved.dailyUrl !== url;
+    if (r.resolved?.dailyUrl) f.dailyUrl.value = r.resolved.dailyUrl;
+    if (r.resolved?.yearlyUrl) f.yearlyUrl.value = r.resolved.yearlyUrl;
+
     const bits = [];
     let bad = false;
+    if (found && r.daily?.ok) bits.push('Found both reports in that folder.');
     if (r.daily) {
       bad = bad || !r.daily.ok;
       bits.push(r.daily.ok

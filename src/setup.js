@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ROOT, SOURCES, rangeKm, kmToMi } from './util.js';
 import { detectStates, networksFor, mesonetFor, STATE_MESONETS } from './region.js';
+import { reportPairs } from './sources/weatherlink.js';
 
 export const CONFIG_PATH = join(ROOT, 'config.json');
 const EXAMPLE_PATH = join(ROOT, 'config.example.json');
@@ -287,11 +288,18 @@ export function setOnFarmStation(cfg, { name, lat, lon, elev_ft, dailyUrl, yearl
   const errors = [];
   if (!name || !String(name).trim()) errors.push('station name is required');
   errors.push(...validateCoords(lat, lon));
-  const daily = httpUrl(errors, dailyUrl, 'the daily report address (NOAAMO.txt)', true);
+  const daily = httpUrl(errors, dailyUrl, 'the report address (the folder, or NOAAMO.txt)', true);
   const yearly = httpUrl(errors, yearlyUrl, 'the yearly report address (NOAAYR.txt)');
   if (!blank(elev_ft) && !Number.isFinite(Number(elev_ft))) errors.push('elevation must be a number of feet if given');
   if (!blank(maxDistanceMi) && !(Number(maxDistanceMi) > 0)) errors.push('range must be a positive number of miles if given');
   if (errors.length) throw new Error(errors.join('; '));
+
+  // The address is resolved here as well as in the Test button, so saving the
+  // folder without pressing Test first does the same thing rather than storing
+  // a URL that reads nothing. A blank yearly box is filled from the daily one:
+  // leaving it empty used to mean no monthly totals and therefore no
+  // calibration, silently, which is not what "optional" should buy.
+  const pair = reportPairs(daily)[0] ?? null;
 
   if (!cfg.sources) cfg.sources = {};
   const prev = cfg.sources.weatherlink ?? {};
@@ -305,8 +313,8 @@ export function setOnFarmStation(cfg, { name, lat, lon, elev_ft, dailyUrl, yearl
     name: String(name).trim(),
     lat: Number(lat), lon: Number(lon),
     elev_ft: blank(elev_ft) ? null : Number(elev_ft),
-    dailyUrl: daily,
-    yearlyUrl: yearly,
+    dailyUrl: pair?.dailyUrl ?? daily,
+    yearlyUrl: yearly || pair?.yearlyUrl || null,
     maxDistanceMi: blank(maxDistanceMi)
       ? Math.round(kmToMi(rangeKm(prev, WEATHERLINK_DEFAULTS.maxDistanceMi)) * 10) / 10
       : Number(maxDistanceMi),

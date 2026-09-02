@@ -126,8 +126,17 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
   // A station switched off in the dashboard can still have links until the next
   // remap. Fetching one would dereference a config section that is no longer
   // there, so the link is ignored rather than the whole gauge pass failing.
-  if (!of?.enabled || !of.dailyUrl)
+  if (!of?.enabled || !of.dailyUrl) {
+    // A station switched on with no daily address reads nothing, and used to do
+    // it without a word — the links were dropped here and no line was ever
+    // logged. Say so: it is the same silence that let one install run for
+    // months with the yearly report in the daily slot.
+    if (of?.enabled && !of.dailyUrl) {
+      logIngest(db, 'onfarm:daily', false, 0, 'no daily report address is set');
+      log('  [onfarm] switched on but no daily report address is set — nothing is being read');
+    }
     for (const k of [...wanted.keys()]) if (k.startsWith('ONFARM|')) wanted.delete(k);
+  }
 
   // On-farm monthly totals — the calibration series, and the only on-farm
   // history that survives a month roll.
@@ -151,7 +160,19 @@ export async function ingest(db, cfg, { sdate, edate = today(), log = console.lo
       if (l.network === 'ONFARM') {
         // Current month only; the report has no archive. Anything older that we
         // already captured stays in the table untouched.
-        rows = (await fetchOnFarmDaily(of.dailyUrl)).filter(r => r.date >= sdate && r.date <= edate);
+        const report = await fetchOnFarmDaily(of.dailyUrl);
+        // Judged on the report, never on the window. A report with no daily rows
+        // at all is the wrong file — the yearly one parses to nothing here — and
+        // that used to be logged as a successful pull of zero rows, which is how
+        // an install goes months without on-farm dailies and says nothing. But a
+        // *window* with no rows is ordinary: the report only ever holds the
+        // current month, so every historical backfill legitimately matches none
+        // of it, and failing on that would cry wolf on every run.
+        if (!report.length) {
+          throw new Error(`${of.dailyUrl} has no daily rows in it`
+            + ' — is that NOAAYR.txt (the yearly totals) rather than NOAAMO.txt?');
+        }
+        rows = report.filter(r => r.date >= sdate && r.date <= edate);
       } else if (l.network === 'KS_MESONET') {
         rows = await fetchKsStationRange(l.station_id, sdate, edate);
       } else {
