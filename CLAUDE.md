@@ -298,6 +298,12 @@ framework and no bundler — it is served as-is.
   `exclude.sources`, which is permanent and changes every number on the page and
   in the CSV. A hidden series stays in the legend struck through — it must not
   become indistinguishable from one that has no data to draw.
+  The cards' explanations fold the *other* way: `.note.blurb` paragraphs are put
+  away by the `.notetoggle` in each card's head and the closed set is persisted
+  (`rm-notes`, `wireCardNotes()`), because prose carries no number and nobody
+  wants to re-hide it daily. The dynamic chart captions (`#dailyNote` and the
+  rest) deliberately carry no `blurb` class — which window and which binning is
+  on screen is part of reading the chart.
 - **History goes back to 1981, and the sources stop at different depths.**
   Verified 2026-08-15 against the farm's own coordinates: PRISM returns a value
   for every day from 1981; IEMRE reaches at least to 1950; MRMS is modern only

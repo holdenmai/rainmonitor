@@ -750,6 +750,81 @@ function refreshFieldSelect(prefer) {
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/* ---------- the cards' own explanations ---------- */
+
+/**
+ * Which cards have had their prose folded away.
+ *
+ * Collapsed keys are stored rather than expanded ones, for the same reason
+ * `farmSel` holds the selection and not its complement: the default has to be
+ * "everything explains itself", so a card added later arrives with its prose
+ * showing instead of silently mute, and an absent value is already right.
+ *
+ * Unlike `hiddenSeries` this survives a reload, and that difference is the
+ * point. Putting a series away changes what the charts say, so it has to come
+ * back; folding a paragraph you have read twenty times changes no number on the
+ * page.
+ */
+let hiddenNotes = new Set();
+try { hiddenNotes = new Set(JSON.parse(localStorage.getItem('rm-notes') || '[]')); } catch { /* ignore */ }
+
+/**
+ * Give every card that carries explanatory prose a fold-away toggle.
+ *
+ * The buttons are built here rather than written into index.html nine times
+ * because a control that cannot work must not be on the page: with no script
+ * there is no toggling and no stored state, and nine hand-written buttons would
+ * sit there claiming otherwise. index.html carries only the two facts that
+ * cannot be derived — see the comment there.
+ *
+ * The toggle joins an existing `.jobactions` group where there is one, so a
+ * card's buttons stay one group rather than two things competing for the same
+ * corner, and otherwise becomes the head's own last child, where
+ * `justify-content: space-between` puts it right. Never into `.legend`:
+ * `legendInto()` rewrites that node's innerHTML on every redraw, so a button
+ * parked there would vanish the first time a series was clicked.
+ */
+function wireCardNotes() {
+  for (const card of document.querySelectorAll('.card[data-notes]')) {
+    const head = card.querySelector('.card-head');
+    if (!head) continue;
+    const blurbs = [...head.querySelectorAll('.note.blurb')];
+    if (!blurbs.length) continue;
+    const key = card.dataset.notes;
+    const title = card.querySelector('h2')?.textContent.trim() ?? 'this card';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'notetoggle';
+    // The name says which card: nine buttons called "Show notes" read as nine
+    // identical buttons in a screen reader's list. aria-expanded carries the
+    // state, so the name itself does not flip — and it is aria-expanded rather
+    // than the legend's aria-pressed because this shows and hides text in
+    // place, which is what the <details> pickers in the topbar already report.
+    btn.setAttribute('aria-label', `Explanation of ${title}`);
+
+    const apply = () => {
+      const off = hiddenNotes.has(key);
+      for (const p of blurbs) p.hidden = off;   // the `hidden` property, as everywhere
+      btn.setAttribute('aria-expanded', off ? 'false' : 'true');
+      btn.textContent = off ? '▾' : '▴';        // same glyphs, same direction, as .multi
+      btn.title = `${off ? 'Show' : 'Hide'} what this card explains`;
+    };
+
+    btn.addEventListener('click', () => {
+      if (!hiddenNotes.delete(key)) hiddenNotes.add(key);
+      apply();
+      // Folded first, persisted second: a browser that refuses localStorage — a
+      // private window, a locked-down office profile — throws here, and a click
+      // that does nothing visible is worse than one forgotten on reload.
+      try { localStorage.setItem('rm-notes', JSON.stringify([...hiddenNotes])); } catch { /* ignore */ }
+    });
+
+    (head.querySelector('.jobactions') ?? head).appendChild(btn);
+    apply();
+  }
+}
+
 /* ---------- pasting a coordinate pair ---------- */
 
 /** One half of a pair: decimal, or degrees/minutes/seconds, with or without a
@@ -2004,6 +2079,12 @@ async function wireAdmin() {
 }
 
 (async function init() {
+  // First, and above the await: this module runs with the document parsed and
+  // nothing painted, so a folded card is folded in the same frame. Below the
+  // fetch — where `rm-theme` is read — the prose paints and then jumps, which
+  // is worse than a colour flip. Above the wireAdmin() gate because the
+  // published copy keeps the Daily table card, prose and all.
+  wireCardNotes();
   META = await apiGet('/api/fields');
   if (!STATIC) await wireAdmin();
 

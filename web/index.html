@@ -131,31 +131,37 @@
     <p class="note" id="calVerdict" style="margin:10px 0 6px"></p>
   </section>
 
-  <section class="card">
+  <!-- `data-notes` is the key web/app.js files this card's folded state under
+       (localStorage `rm-notes`), so it has to stay put once shipped — renaming
+       one silently unfolds that card for everyone who had folded it. `blurb`
+       marks the prose the toggle folds; the chart captions above deliberately
+       carry no such class, because which window and which binning is on screen
+       is part of reading the chart rather than something to put away. -->
+  <section class="card" data-notes="table">
     <div class="card-head">
       <div>
         <h2>Daily table</h2>
-        <p class="note">Blank means the source reported nothing for that day — not zero rain.</p>
+        <p class="note blurb">Blank means the source reported nothing for that day — not zero rain.</p>
       </div>
     </div>
     <div class="table-wrap"><table id="dataTable"><thead></thead><tbody></tbody></table></div>
   </section>
 
   <!-- publish:admin start -->
-  <section class="card">
+  <section class="card" data-notes="counts">
     <div class="card-head"><div><h2>What counts for <span id="exField">this field</span></h2>
-      <p class="note">Untick a source or a gauge and it stops counting for this field, in the past as well as going forward. Nothing is deleted — tick it back on and the history returns.</p>
-      <p class="note" style="margin-top:6px">The list is the nearest six gauges, and the nearest two count to begin with. Unticking one does <em>not</em> promote another: a gauge half a mile away and one thirty miles away are measurements of different ground, and swapping one for the other would quietly change what this field's number means. The rest are listed so you can add one deliberately.</p></div></div>
+      <p class="note blurb">Untick a source or a gauge and it stops counting for this field, in the past as well as going forward. Nothing is deleted — tick it back on and the history returns.</p>
+      <p class="note blurb" style="margin-top:6px">The list is the nearest six gauges, and the nearest two count to begin with. Unticking one does <em>not</em> promote another: a gauge half a mile away and one thirty miles away are measurements of different ground, and swapping one for the other would quietly change what this field's number means. The rest are listed so you can add one deliberately.</p></div></div>
     <div class="toggles" id="sourceToggles"></div>
     <div class="table-wrap"><table id="stationTable"><thead></thead><tbody></tbody></table></div>
     <p class="note" id="exMsg" style="margin:8px 0 6px"></p>
   </section>
 
-  <section class="card" id="jobCard">
+  <section class="card" id="jobCard" data-notes="collection">
     <div class="card-head">
       <div>
         <h2>Data collection</h2>
-        <p class="note">This keeps itself up to date while the dashboard is running — it checks every 15 minutes and pulls whenever the record has gone stale, including catching up after the computer has been off. Nothing here needs a command prompt.</p>
+        <p class="note blurb">This keeps itself up to date while the dashboard is running — it checks every 15 minutes and pulls whenever the record has gone stale, including catching up after the computer has been off. Nothing here needs a command prompt.</p>
       </div>
       <div class="jobactions">
         <button class="btn" type="button" id="jobIngest">Check for new rainfall</button>
@@ -181,11 +187,11 @@
     <p class="note" id="historyMsg"></p>
   </section>
 
-  <section class="card">
+  <section class="card" data-notes="transfer">
     <div class="card-head">
       <div>
         <h2>Export &amp; import</h2>
-        <p class="note">Move a date range between machines. Run this on more than one computer and their gaps will not line up — RFC QPE publishes no archive, so a day missed while a machine was off is gone on that machine but not on the one that was awake. Importing never overwrites newer data, and re-importing the same file changes nothing.</p>
+        <p class="note blurb">Move a date range between machines. Run this on more than one computer and their gaps will not line up — RFC QPE publishes no archive, so a day missed while a machine was off is gone on that machine but not on the one that was awake. Importing never overwrites newer data, and re-importing the same file changes nothing.</p>
       </div>
     </div>
 
@@ -219,12 +225,12 @@
     <p class="note" id="importMsg" style="margin:8px 0 6px"></p>
   </section>
 
-  <section class="card" id="backupCard">
+  <section class="card" id="backupCard" data-notes="backup">
     <div class="card-head">
       <div>
         <h2>Backup &amp; restore</h2>
-        <p class="note">Everything in one file: your settings, fields, manual gauges, weather station and the whole rainfall database. This is how you set a second computer up as a copy of this one, or move to a new machine — download it here, restore it there.</p>
-        <p class="note" style="margin-top:6px"><strong>Restoring replaces everything on this machine.</strong> It is not a merge — use <em>Export &amp; import</em> above for two machines that are both already collecting. A copy of what is here now is saved to <code>data/backups</code> first, so a restore onto the wrong machine can be undone.</p>
+        <p class="note blurb">Everything in one file: your settings, fields, manual gauges, weather station and the whole rainfall database. This is how you set a second computer up as a copy of this one, or move to a new machine — download it here, restore it there.</p>
+        <p class="note blurb" style="margin-top:6px"><strong>Restoring replaces everything on this machine.</strong> It is not a merge — use <em>Export &amp; import</em> above for two machines that are both already collecting. A copy of what is here now is saved to <code>data/backups</code> first, so a restore onto the wrong machine can be undone.</p>
       </div>
       <div class="jobactions">
         <a class="btn" id="backupBtn" href="/api/backup.json" download>Download full backup</a>
@@ -240,13 +246,13 @@
     <p class="note" id="restoreMsg" style="margin:8px 0 6px"></p>
   </section>
 
-  <section class="card" id="stationCard">
+  <section class="card" id="stationCard" data-notes="station">
     <div class="card-head">
       <div>
         <h2>Your own weather station</h2>
-        <p class="note">A Davis — or anything else publishing WeatherLink's NOAA-format reports: <code>NOAAMO.txt</code> for the current month's daily rows, <code>NOAAYR.txt</code> for the year's monthly totals. It stands on your own ground, so it ranks first for whichever fields are nearest and becomes the reference the radar is checked against.</p>
-        <p class="note" style="margin-top:6px"><strong>Give it the folder the two reports sit in</strong> and both are found — or either file, and the other one is found beside it. Both matter and they do different jobs: the daily report is the only source of daily on-farm rainfall and is overwritten every month, while the yearly one is what the calibration below is measured from.</p>
-        <p class="note" style="margin-top:6px">Use the <em>station's</em> coordinates, not a field's. <strong>Test the address</strong> and it reads them out of the report header for you. You can also paste a <code>latitude, longitude</code> pair into either box and both fill in.</p>
+        <p class="note blurb">A Davis — or anything else publishing WeatherLink's NOAA-format reports: <code>NOAAMO.txt</code> for the current month's daily rows, <code>NOAAYR.txt</code> for the year's monthly totals. It stands on your own ground, so it ranks first for whichever fields are nearest and becomes the reference the radar is checked against.</p>
+        <p class="note blurb" style="margin-top:6px"><strong>Give it the folder the two reports sit in</strong> and both are found — or either file, and the other one is found beside it. Both matter and they do different jobs: the daily report is the only source of daily on-farm rainfall and is overwritten every month, while the yearly one is what the calibration below is measured from.</p>
+        <p class="note blurb" style="margin-top:6px">Use the <em>station's</em> coordinates, not a field's. <strong>Test the address</strong> and it reads them out of the report header for you. You can also paste a <code>latitude, longitude</code> pair into either box and both fill in.</p>
       </div>
     </div>
     <p class="jobstatus" id="stationStatus"></p>
@@ -268,11 +274,11 @@
     <p class="note" id="stationMsg" style="margin:8px 0 6px"></p>
   </section>
 
-  <section class="card">
+  <section class="card" data-notes="gauges">
     <div class="card-head">
       <div>
         <h2>Manual gauges</h2>
-        <p class="note">Gauges you read yourself — the stick by the weather station, a neighbour's gauge near a field. Nothing fetches these, so they are never overwritten by an ingest. They rank by distance like any other gauge and are charted as their own series, so they stay an independent check rather than getting averaged into the automatic number. Paste a <code>latitude, longitude</code> pair into either coordinate box and both fill in.</p>
+        <p class="note blurb">Gauges you read yourself — the stick by the weather station, a neighbour's gauge near a field. Nothing fetches these, so they are never overwritten by an ingest. They rank by distance like any other gauge and are charted as their own series, so they stay an independent check rather than getting averaged into the automatic number. Paste a <code>latitude, longitude</code> pair into either coordinate box and both fill in.</p>
       </div>
     </div>
     <div class="table-wrap"><table id="gaugeTable"><thead></thead><tbody></tbody></table></div>
@@ -295,11 +301,11 @@
     <div class="table-wrap"><table id="readingTable"><thead></thead><tbody></tbody></table></div>
   </section>
 
-  <section class="card">
+  <section class="card" data-notes="fields">
     <div class="card-head">
       <div>
         <h2>Fields</h2>
-        <p class="note">Acres and farm save as soon as you leave the box. Adding or moving a field maps its nearby gauges and pulls its history automatically — watch it happen under Data collection above. Paste a <code>latitude, longitude</code> pair straight out of a map into either coordinate box and both fill in.</p>
+        <p class="note blurb">Acres and farm save as soon as you leave the box. Adding or moving a field maps its nearby gauges and pulls its history automatically — watch it happen under Data collection above. Paste a <code>latitude, longitude</code> pair straight out of a map into either coordinate box and both fill in.</p>
       </div>
     </div>
     <div class="table-wrap"><table id="fieldTable"><thead></thead><tbody></tbody></table></div>
@@ -316,11 +322,11 @@
     <p class="note" id="fieldMsg" style="margin:8px 0 6px"></p>
   </section>
 
-  <section class="card" id="updateCard">
+  <section class="card" id="updateCard" data-notes="updates">
     <div class="card-head">
       <div>
         <h2>Software updates</h2>
-        <p class="note">Checked once a day against where this copy was installed from. Updating downloads the new code and restarts the dashboard; your fields, settings and rainfall history are untouched. It will refuse rather than overwrite local changes.</p>
+        <p class="note blurb">Checked once a day against where this copy was installed from. Updating downloads the new code and restarts the dashboard; your fields, settings and rainfall history are untouched. It will refuse rather than overwrite local changes.</p>
       </div>
       <div class="jobactions">
         <button class="btn" type="button" id="updateCheck">Check now</button>
