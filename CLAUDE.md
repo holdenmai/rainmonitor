@@ -243,6 +243,21 @@ framework and no bundler — it is served as-is.
   all-fields chart, the calibration and the CSV need. Charted gauges are capped
   at `GAUGE_SLOTS` (4) and the rest are named in the response's `uncharted`, so
   the cap is stated rather than silent.
+- **A source may headline a KPI tile only if it *covers* the window.**
+  `headline()` in `web/app.js` still prefers the finest grid — rfcqpe, then
+  mrms, then prism — but skips any source that reported on under 90% of the
+  window's days. `views.summary()` ships `span` (the window in calendar days)
+  and `days` (how many each source answered for) so both homes decide alike;
+  the counts are for the `SOURCES` series only, since a `g:` gauge column is
+  drawn as its own line and never headlines. Presence is not coverage, and the
+  difference is not small: RFC QPE keeps no archive and holds only the days
+  since it was switched on, so on 2026-10-27 it had 80 of the season's 300 days
+  and the season tile summed them to a confident 11.95 in where MRMS's 300 days
+  read 25.06. The threshold is 90% and not 100% because PRISM runs about three
+  days behind — a season total that silently ends on Tuesday is the same
+  mistake — and because a 7-day window cannot lose a day without failing a
+  stricter one. When nothing covers the window the fullest source answers and
+  the tile says `only N of M days` rather than looking like any other total.
 - **The comparison is encoded by position and stroke, never by hue.** Whichever
   kind it is, the other side is folded onto the same rows as `c:<key>` columns
   (`mergeCompare`), the daily chart mirrors it *below* the baseline on the same

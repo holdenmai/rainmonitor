@@ -1049,16 +1049,39 @@ async function load() {
   // KPI tiles. Radar is the field-specific number; gauge is shown beside it so
   // the reader always sees whether the two agree.
   const pick = w => me[w] ?? {};
-  // Headline prefers the finest grid that actually has a value. RFC QPE only
-  // exists from the day it was switched on, so older windows fall back to MRMS
-  // and the tile says which one it is rather than quietly mixing them.
+  const HEAD_SRC = {
+    rfcqpe: { src: 'RFC QPE, ~2.5 mi grid', col: 'var(--series-rfcqpe)' },
+    mrms: { src: 'Radar QPE, ~7 mi grid', col: 'var(--series-mrms)' },
+    prism: { src: 'PRISM, ~2.5 mi grid', col: 'var(--series-prism)' },
+  };
+  /**
+   * Headline prefers the finest grid that actually *covers* the window.
+   *
+   * Presence used to be the whole test, and presence is not coverage. RFC QPE
+   * keeps no archive and only holds days since it was switched on — 80 of this
+   * season's 300 — so a season tile summing it read 11.95 in against MRMS's
+   * 25.06 in for the same ground. The number was not wrong about the days it
+   * had; it was answering a different question from the one the tile asks, and
+   * nothing on the tile said so.
+   *
+   * A source may answer for a window only if it reported on at least COVERED of
+   * that window's days; otherwise the next one down takes it. The threshold is
+   * not 100% because PRISM runs about three days behind, and a season total
+   * that silently ends on Tuesday is the same class of mistake. If none of them
+   * covers it, the fullest one answers and the tile says how thin it is.
+   */
+  const COVERED = 0.9;
   const headline = d => {
-    const fine = has(d.rfcqpe) && d.rfcqpe > 0;
-    return {
-      v: fine ? d.rfcqpe : d.mrms,
-      src: fine ? 'RFC QPE, ~2.5 mi grid' : 'Radar QPE, ~7 mi grid',
-      col: fine ? 'var(--series-rfcqpe)' : 'var(--series-mrms)',
-    };
+    const span = d.span ?? 0;
+    const got = k => (has(d[k]) ? d.days?.[k] ?? 0 : -1);
+    const order = ['rfcqpe', 'mrms', 'prism'];
+    const key = order.find(k => got(k) >= 0 && got(k) >= span * COVERED)
+      ?? order.filter(k => got(k) >= 0).sort((a, b) => got(b) - got(a))[0];
+    if (!key) return { v: undefined, src: 'nothing reported', col: 'var(--text-muted)' };
+    // Stated, not silent: the one case where the headline is a partial sum.
+    const short = span && got(key) < span * COVERED
+      ? ` — only ${got(key)} of ${span} days` : '';
+    return { v: d[key], src: HEAD_SRC[key].src + short, col: HEAD_SRC[key].col };
   };
   const tile = (label, w, extra) => {
     const d = pick(w);

@@ -13,7 +13,7 @@
  * server.js rebinds `cfg` whenever config.json is written, and a captured value
  * would leave every view answering from the config as it was at startup.
  */
-import { today, addDays, SOURCES, historyStart, HISTORY_FLOOR_YEAR } from './util.js';
+import { today, addDays, daysBetween, SOURCES, historyStart, HISTORY_FLOOR_YEAR } from './util.js';
 import { manualGauges, onFarmStation, farmsOf } from './setup.js';
 
 /**
@@ -122,6 +122,8 @@ export function createViews(db, getCfg) {
     const vals = rows.map(r => r[k]).filter(v => v !== null && v !== undefined);
     return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) * 100) / 100 : null;
   };
+  const reported = (rows, k) =>
+    rows.reduce((n, r) => n + (r[k] === null || r[k] === undefined ? 0 : 1), 0);
 
   function summary(fieldId) {
     const end = today();
@@ -130,9 +132,25 @@ export function createViews(db, getCfg) {
     const keys = [...SOURCES, ...gauges.map(g => g.key)];
     const win = n => rows.filter(r => r.date > addDays(end, -n));
     const out = { field_id: fieldId, gauges };
-    for (const [label, subset] of [['d1', win(1)], ['d7', win(7)], ['d30', win(30)],
-                                   ['season', rows], ['growing', rows.filter(r => r.date >= growStart())]]) {
+    // `span` is the window's length in calendar days and `days` is how many of
+    // them each source actually answered for. A total is only comparable with
+    // another total when both cover the same ground: RFC QPE keeps no archive
+    // and starts the day it is switched on, so summing it over a season reads
+    // as a drought rather than as a short series. The page needs the count to
+    // tell those apart, and it cannot be recovered from a sum.
+    const spanTo = from => daysBetween(from, end) + 1;
+    for (const [label, subset, span] of [
+      ['d1', win(1), 1], ['d7', win(7), 7], ['d30', win(30), 30],
+      ['season', rows, spanTo(seasonStart())],
+      ['growing', rows.filter(r => r.date >= growStart()), spanTo(growStart())]]) {
       out[label] = Object.fromEntries(keys.map(s => [s, sum(subset, s)]));
+      out[label].span = span;
+      // Counted for the per-field series only, not the `g:` gauge columns: a
+      // gauge is drawn as its own line and never headlines a tile, so counting
+      // it would be shipping a number nothing reads. The counts cost the daily
+      // published upload 8 KB of its 128 KB either way — measured 2026-10-27,
+      // so trim here before reaching for the payload if that ever matters.
+      out[label].days = Object.fromEntries(SOURCES.map(s => [s, reported(subset, s)]));
     }
     // Days since the last measurable rain (>= 0.01 in) on any source.
     let dry = null;
